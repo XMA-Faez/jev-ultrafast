@@ -1,0 +1,9 @@
+<!doctype html>
+<title>Submit on Enter</title>
+<style>body{margin:30px}input,button{font-size:18px}</style>
+<form id="search" onsubmit="event.preventDefault(); document.getElementById('result').textContent='Searched for ' + this.query.value">
+  <label>Search <input name="query" id="query"></label>
+</form>
+<p id="result"></p>
+<button id="open" onclick="document.getElementById('dialog').showModal()">Open dialog</button>
+<dialog id="dialog"><p>Dialog content</p><button>Inside dialog</button></dialog>

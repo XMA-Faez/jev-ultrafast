@@ -1,0 +1,10 @@
+<!doctype html>
+<title>Native value inputs</title>
+<label>Departure <input id="departure" type="date"></label>
+<label>Alarm <input id="alarm" type="time"></label>
+<label>Volume <input id="volume" type="range" min="0" max="100" step="5" value="50"></label>
+<label>Accent <input id="accent" type="color" value="#000000"></label>
+<script>
+  window.changes = [];
+  document.addEventListener('change', event => window.changes.push(event.target.id));
+</script>

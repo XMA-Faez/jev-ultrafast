@@ -1,0 +1,6 @@
+<!doctype html>
+<title>Popup opener</title>
+<style>body{margin:30px}a,button{font-size:18px;display:block;margin:10px 0}</style>
+<a id="tab" href="popup_target.html?via=link" target="_blank">Open in new tab</a>
+<button id="window" onclick="window.open('popup_target.html?via=open', 'popup', 'width=600,height=500')">Open popup window</button>
+<button id="late" onclick="setTimeout(() => window.open('popup_target.html?via=late', '_blank'), 30)">Open popup later</button>

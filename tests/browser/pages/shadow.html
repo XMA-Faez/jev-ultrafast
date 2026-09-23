@@ -1,0 +1,24 @@
+<!doctype html>
+<title>Shadow DOM</title>
+<script>
+  customElements.define('nested-note', class extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({mode: 'open'}).innerHTML = '<button>Nested action</button>';
+    }
+  });
+  customElements.define('checkout-panel', class extends HTMLElement {
+    constructor() {
+      super();
+      const root = this.attachShadow({mode: 'open'});
+      root.innerHTML = '<p>Shadow total: $42</p>' +
+        '<label for="coupon">Coupon</label><input id="coupon">' +
+        '<span id="gift-hint">Gift message</span><input aria-labelledby="gift-hint">' +
+        '<button id="apply">Apply coupon</button><nested-note></nested-note>';
+      root.querySelector('#apply').addEventListener('click', () => { window.applied = (window.applied || 0) + 1; });
+    }
+  });
+</script>
+<button>Before</button>
+<checkout-panel></checkout-panel>
+<button>After</button>

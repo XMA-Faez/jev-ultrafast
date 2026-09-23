@@ -1,0 +1,8 @@
+<!doctype html>
+<title>Iframe child</title>
+<style>body{margin:15px}input,button{font-size:16px}</style>
+<form onsubmit="event.preventDefault(); document.getElementById('greeting').textContent='Hello ' + this.name.value">
+  <label>Name <input name="name" id="name"></label>
+  <button id="send">Send greeting</button>
+</form>
+<p id="greeting">Waiting</p>

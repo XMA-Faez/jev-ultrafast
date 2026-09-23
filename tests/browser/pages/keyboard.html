@@ -1,0 +1,9 @@
+<!doctype html>
+<title>Keyboard controls</title>
+<form id="search" onsubmit="event.preventDefault(); document.querySelector('#result').textContent='Submitted ' + this.query.value">
+  <label>Query <input id="query" name="query"></label>
+</form>
+<p id="result">Not submitted</p>
+<label>Airport <input id="airport" role="combobox" aria-expanded="false" aria-controls="airports"></label>
+<ul id="airports" role="listbox"><li role="option">ZRH</li></ul>
+<button id="menu" aria-expanded="true">Menu</button>
