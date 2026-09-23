@@ -7,15 +7,19 @@ license = "MIT"
 requires-python = ">=3.12"
 dependencies = ["browser-harness==0.1.13", "httpx[http2]>=0.28,<1"]
 
+[project.optional-dependencies]
+mcp = ["mcp[cli]>=1.20"]
+
 [project.scripts]
 jev = "jev_ultrafast.demo:main"
+jev-mcp = "jev_ultrafast.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["pytest>=8.4,<9", "ruff>=0.14,<1", "pillow>=11,<13"]
+dev = ["pytest>=8.4,<9", "ruff>=0.14,<1", "pillow>=11,<13", "mcp[cli]>=1.20"]
 
 [tool.ruff]
 line-length = 120
@@ -25,3 +29,4 @@ select = ["E", "F", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["browser: needs a real Chrome"]
