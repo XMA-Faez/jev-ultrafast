@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from jev_ultrafast import agent as loop
-from jev_ultrafast import model
+from jev_ultrafast import model, questions
 from jev_ultrafast.browser import StalePage, browser_operation, fingerprint
 
 
@@ -33,11 +33,11 @@ def choice(ids, selected):
     return {"choice": selected, "confidence": 1.0, "probabilities": {i: float(i == selected) for i in ids}}
 
 
-def decision(action="e1"):
+def decision(action="e1", operation="TYPE_TEXT", target="1"):
     return {
         "choice": action,
-        "operation": "TYPE_TEXT",
-        "target": "1",
+        "operation": operation,
+        "target": target,
         "confidence": 1.0,
         "probabilities": {action: 1.0},
         "latency_ms": 10,
@@ -153,29 +153,51 @@ def test_quoted_task_text_still_uses_the_llm(monkeypatch):
 
 def test_missing_text_credential_stops_before_guessing(monkeypatch):
     monkeypatch.delenv("TEXT_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     with pytest.raises(ValueError, match="TEXT_MODEL_API_KEY"):
         model.field_text({"goal": 'Enter "Zurich"'})
 
 
+def make_runner(goals=("Find a book",), current=None, **agent_settings):
+    """An Agent without a real browser: a Mock browser that keeps returning `current` (default: page())."""
+    a = loop.Agent.__new__(loop.Agent)
+    p = current or page()
+    plan = list(goals)
+    a.state = loop.RunState(
+        browser=Mock(fresh=Mock(return_value=True), observe=Mock(return_value=p), act=Mock(return_value={})),
+        page=p,
+        decision=decision(),
+        goal=plan[0],
+        plan=plan,
+        status="predicted",
+        started_at=time.perf_counter(),
+    )
+    for name, value in agent_settings.items():
+        setattr(a, name, value)
+    if a.trace:
+        a.state.trace_path = str(a.trace.path)
+    return a
+
+
+def scripted_choices(monkeypatch, *decisions):
+    """Replace the TypeSafe call with a fixed sequence of decisions; returns the recorded choose() arguments."""
+    queue, calls = list(decisions), []
+
+    def fake_choose(state, goal, history, completed_goals=()):
+        calls.append({"goal": goal, "completed_goals": list(completed_goals), "history": list(history)})
+        return queue.pop(0)
+
+    monkeypatch.setattr(loop, "choose", fake_choose)
+    return calls
+
+
+def act_now(agent):
+    return agent.command("act", {"fingerprint": agent.state["page"]["fingerprint"]})
+
+
 @pytest.fixture
 def runner():
-    a = loop.Agent.__new__(loop.Agent)
-    a.screenshots = False
-    a.pending_text = None
-    p = page()
-    a.state = {
-        "browser": Mock(fresh=Mock(return_value=True), observe=Mock(return_value=p)),
-        "page": p,
-        "decision": decision(),
-        "goal": "Find a book",
-        "history": [],
-        "decisions": [],
-        "status": "predicted",
-        "started_at": time.perf_counter(),
-        "record": False,
-        "text_calls": [],
-    }
-    return a
+    return make_runner()
 
 
 def test_stale_decision_is_consumed_before_any_mutation(runner):
@@ -318,3 +340,80 @@ def test_navigation_during_prediction_reobserves_without_action(runner):
     assert runner.state["status"] == "ready"
     assert runner.state["decision"] is None
     runner.state["browser"].act.assert_not_called()
+
+
+def test_key_controls_become_operations_and_execute(runner, monkeypatch):
+    p = page()
+    enter = {"id": "press_enter", "kind": "key", "key": "Enter", "label": "Press Enter in the focused field"}
+    p["actions"].append(enter)
+    p["actions"].append({"id": "press_escape", "kind": "key", "key": "Escape", "label": "Press Escape"})
+    _, _, controls = model.action_space(p["actions"])
+    assert controls["PRESS_ENTER"]["id"] == "press_enter" and "PRESS_ESCAPE" in controls
+
+    def post(_url, _key, body):
+        criteria = body["questions"]["operation"]["criteria"]
+        assert criteria["PRESS_ENTER"] == "Press Enter in the focused field"
+        return {"answers": {"operation": choice(criteria, "PRESS_ENTER")}}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    chosen = model.choose(p, "Search for books", [])
+    assert chosen["choice"] == "press_enter" and chosen["operation"] == "PRESS_ENTER" and chosen["target"] is None
+
+    runner.state.update(page=p, decision={**decision("press_enter", "PRESS_ENTER", None), "probabilities": {
+        "press_enter": 1.0}})
+    act_now(runner)
+    executed = runner.state["browser"].act.call_args.args[0]
+    assert executed["kind"] == "key" and executed["key"] == "Enter"
+    assert runner.state["history"][-1]["operation"] == "PRESS_ENTER"
+
+
+def test_field_context_forwards_native_format():
+    action = {"id": "e9", "kind": "fill", "label": "Depart", "role": "textbox", "value": "",
+              "native_value": True, "format": "YYYY-MM-DD"}
+    context = model.field_context("Leave on May 3 2027", action, page(), [])
+    assert context["field"]["format"] == "YYYY-MM-DD" and context["field"]["native_value"] is True
+    assert "format" not in model.field_context("x", page()["actions"][0], page(), [])["field"]
+    assert "format" in questions.TEXT_VALUE and "exactly" in questions.TEXT_VALUE
+
+
+def test_next_action_rules_are_generic_and_mention_keys():
+    rules = questions.NEXT_ACTION
+    assert "date picker" not in rules.lower() and "calendar" not in rules.lower()
+    assert "PRESS_ENTER submits the focused field when no submit control is offered" in rules
+    assert "PRESS_ESCAPE closes an open" in rules and "arrow keys move within an open list" in rules
+
+
+def test_completed_goals_ride_in_the_same_single_request(monkeypatch):
+    calls = []
+
+    def post(_url, _key, body):
+        calls.append(body)
+        return {"answers": {"operation": choice(body["questions"]["operation"]["criteria"], "WAIT")}}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    model.choose(page(), "Open the second result", [], ["Search for books"])
+    model.choose(page(), "Search for books", [])
+    assert len(calls) == 2
+    assert all(q["instructions"]["completed_goals"] == ["Search for books"] for q in calls[0]["questions"].values())
+    assert all("completed_goals" not in q["instructions"] for q in calls[1]["questions"].values())
+
+
+def test_frame_elements_with_colliding_node_ids_get_separate_indices():
+    actions = [
+        {"id": "e1", "kind": "click", "label": "Top button", "role": "button", "value": "", "node": 5},
+        {"id": "e2", "kind": "click", "label": "Frame button", "role": "button", "value": "", "node": 5, "frame": "F1"},
+    ]
+    elements, targets, _ = model.action_space(actions)
+    assert [e["label"] for e in elements] == ["Top button", "Frame button"]
+    assert targets["CLICK"]["2"]["id"] == "e2"
+
+
+def test_tab_adopted_during_observation_is_noted(runner):
+    runner.state["decision"] = decision("e3")
+    late_page = {**page(), "new_tab": {"url": "https://example.test/popup", "title": "Popup"}}
+    runner.state["browser"].observe.return_value = late_page
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert runner.state["history"][-1]["action"] == "switched to new tab https://example.test/popup"
+    assert "new_tab" not in runner.state["page"]
