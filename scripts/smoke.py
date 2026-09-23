@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from jev_ultrafast import Agent
-from jev_ultrafast.demo import load_environment
+from jev_ultrafast.settings import load_dotenv
 
 GOALS = (
     "Use the destination search and filters to find Design stays in Lisbon with Free cancellation, "
@@ -19,7 +19,7 @@ def main():
     parser.add_argument("--max-actions", type=int, default=15)
     parser.add_argument("--goal", default=GOALS)
     args = parser.parse_args()
-    load_environment()
+    load_dotenv()
     output = Path("artifacts/dynamic/fixture") / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     output.mkdir(parents=True, exist_ok=True)
     print(f"Trace: {output}", flush=True)

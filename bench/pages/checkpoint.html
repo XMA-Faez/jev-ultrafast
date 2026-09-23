@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Projects · Workbench</title>
+    <style>
+      :root {
+        --ink: #22262e;
+        --muted: #666d79;
+        --line: #d9dde4;
+        --surface: #ffffff;
+        --page: #f5f6f8;
+        --danger: #a3301f;
+      }
+      body {
+        margin: 0;
+        font: 15px system-ui, sans-serif;
+        color: var(--ink);
+        background: var(--page);
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 36px 20px;
+      }
+      ul {
+        list-style: none;
+        padding: 0;
+      }
+      li {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px 16px;
+        margin-bottom: 10px;
+      }
+      button {
+        font: inherit;
+        padding: 7px 14px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+      .danger {
+        color: var(--surface);
+        background: var(--danger);
+        border-color: var(--danger);
+      }
+      .files {
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Projects</h1>
+      <p id="notice" role="status"></p>
+      <ul id="projects"></ul>
+      <dialog id="confirm">
+        <p id="confirm-text"></p>
+        <button type="button" class="danger" id="confirm-delete">Delete permanently</button>
+        <button type="button" id="cancel-delete">Cancel</button>
+      </dialog>
+    </main>
+    <script>
+      const projects = [
+        { name: "Atlas", files: 12 },
+        { name: "Beacon", files: 4 },
+      ];
+      let pending = null;
+      const dialog = document.getElementById("confirm");
+      function render() {
+        const list = document.getElementById("projects");
+        list.innerHTML = "";
+        for (const project of projects) {
+          const row = document.createElement("li");
+          row.innerHTML = "<span><strong></strong> <span class='files'></span></span><button type='button'>Delete project</button>";
+          row.querySelector("strong").textContent = project.name;
+          row.querySelector(".files").textContent = `${project.files} files`;
+          const remove = row.querySelector("button");
+          remove.setAttribute("aria-label", `Delete project ${project.name}`);
+          remove.onclick = () => {
+            pending = project;
+            document.getElementById("confirm-text").textContent = `Delete ${project.name} and all of its files?`;
+            dialog.showModal();
+          };
+          list.append(row);
+        }
+      }
+      document.getElementById("cancel-delete").onclick = () => dialog.close();
+      document.getElementById("confirm-delete").onclick = () => {
+        projects.splice(projects.indexOf(pending), 1);
+        history.replaceState(null, "", `?deleted=${encodeURIComponent(pending.name.toLowerCase())}`);
+        document.getElementById("notice").textContent = `Project ${pending.name} deleted`;
+        dialog.close();
+        render();
+      };
+      render();
+    </script>
+  </body>
+</html>

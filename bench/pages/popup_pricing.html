@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Pricing · Lumen CLI</title>
+    <style>
+      :root {
+        --ink: #202530;
+        --muted: #636b78;
+        --line: #d8dce3;
+        --surface: #ffffff;
+        --page: #fbfbfc;
+      }
+      body {
+        margin: 0;
+        font: 15px system-ui, sans-serif;
+        color: var(--ink);
+        background: var(--page);
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 32px 20px;
+      }
+      .plans {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .plan {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 18px;
+      }
+      .note {
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Pricing</h1>
+      <div class="plans">
+        <section class="plan">
+          <h2>Solo</h2>
+          <p>Free for one developer.</p>
+        </section>
+        <section class="plan">
+          <h2>Team</h2>
+          <p>$24 per month when billed monthly.</p>
+          <p class="note">$240 per year when billed annually.</p>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

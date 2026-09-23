@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Field notes archive</title>
+    <style>
+      :root {
+        --ink: #243129;
+        --muted: #6b7a70;
+        --line: #d9e0d6;
+        --surface: #ffffff;
+        --page: #f7f8f4;
+      }
+      body {
+        margin: 0;
+        font: 15px system-ui, sans-serif;
+        color: var(--ink);
+        background: var(--page);
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 40px 20px;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        font: inherit;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+      .hint,
+      .summary {
+        color: var(--muted);
+      }
+      ol {
+        padding: 0;
+        list-style: none;
+      }
+      li {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 12px 14px;
+        margin-bottom: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Field notes archive</h1>
+      <input type="search" id="query" aria-label="Search field notes" placeholder="Search field notes" autocomplete="off" />
+      <p class="hint" id="status">Type a word and press Enter.</p>
+      <ol id="results"></ol>
+    </main>
+    <script>
+      const notes = [
+        { title: "Tide pools at low water", summary: "Sea stars and snails stranded between tides." },
+        { title: "Counting anemones in the tide pools", summary: "A monthly census along the north rocks." },
+        { title: "Lichen on granite", summary: "Slow colonies on the ridge above the bay." },
+        { title: "Night heron roost", summary: "Seven birds in the willows at dusk." },
+        { title: "Reading tide tables", summary: "Planning visits around the spring low." },
+      ];
+      const field = document.getElementById("query");
+      const status = document.getElementById("status");
+      const list = document.getElementById("results");
+      function search(query) {
+        const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+        const matches = notes.filter((note) =>
+          words.every((word) => `${note.title} ${note.summary}`.toLowerCase().includes(word)),
+        );
+        history.replaceState(null, "", `?q=${encodeURIComponent(query)}`);
+        status.textContent = `${matches.length} results for “${query}”`;
+        list.innerHTML = "";
+        for (const note of matches) {
+          const item = document.createElement("li");
+          item.innerHTML = "<strong></strong><div class='summary'></div>";
+          item.querySelector("strong").textContent = note.title;
+          item.querySelector(".summary").textContent = note.summary;
+          list.append(item);
+        }
+      }
+      field.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && field.value.trim()) search(field.value.trim());
+      });
+    </script>
+  </body>
+</html>

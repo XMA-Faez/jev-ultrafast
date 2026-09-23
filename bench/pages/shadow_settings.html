@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Alert settings</title>
+    <style>
+      :root {
+        --ink: #232a33;
+        --muted: #69717c;
+        --page: #f6f7f9;
+        --positive: #2f6b45;
+      }
+      body {
+        margin: 0;
+        font: 15px system-ui, sans-serif;
+        color: var(--ink);
+        background: var(--page);
+      }
+      main {
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 40px 20px;
+      }
+      #saved {
+        color: var(--positive);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Alert settings</h1>
+      <p>Choose how often the newsroom alerts you.</p>
+      <alert-settings></alert-settings>
+      <p id="saved" role="status"></p>
+    </main>
+    <template id="alert-settings-template">
+      <style>
+        :host {
+          --line: #d5d9df;
+          --surface: #ffffff;
+          --accent: #2c4a7a;
+          display: block;
+        }
+        form {
+          display: grid;
+          gap: 16px;
+          padding: 20px;
+          background: var(--surface);
+          border: 1px solid var(--line);
+          border-radius: 8px;
+        }
+        label {
+          display: grid;
+          gap: 6px;
+        }
+        label.inline {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        input[type="text"],
+        select {
+          font: inherit;
+          padding: 8px 10px;
+          border: 1px solid var(--line);
+          border-radius: 6px;
+        }
+        button {
+          font: inherit;
+          justify-self: start;
+          padding: 9px 18px;
+          color: var(--surface);
+          background: var(--accent);
+          border: 0;
+          border-radius: 6px;
+        }
+      </style>
+      <form>
+        <label
+          >Digest frequency
+          <select name="digest">
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+            <option value="never">Never</option>
+          </select>
+        </label>
+        <label class="inline"><input type="checkbox" name="weekends" /> Mute alerts on weekends</label>
+        <label>Followed topic <input type="text" name="topic" autocomplete="off" /></label>
+        <button type="submit">Save settings</button>
+      </form>
+    </template>
+    <script>
+      customElements.define(
+        "alert-settings",
+        class extends HTMLElement {
+          connectedCallback() {
+            const root = this.attachShadow({ mode: "open" });
+            root.append(document.getElementById("alert-settings-template").content.cloneNode(true));
+            const form = root.querySelector("form");
+            form.addEventListener("submit", (event) => {
+              event.preventDefault();
+              const digest = form.elements.digest.value;
+              const weekends = form.elements.weekends.checked ? "muted" : "on";
+              const topic = form.elements.topic.value.trim();
+              const query = new URLSearchParams({ digest, weekends, topic });
+              history.replaceState(null, "", `?${query}`);
+              document.getElementById("saved").textContent =
+                `Settings saved: ${digest} digest · weekend alerts ${weekends} · topic ${topic || "none"}`;
+            });
+          }
+        },
+      );
+    </script>
+  </body>
+</html>

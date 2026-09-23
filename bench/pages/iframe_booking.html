@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Harbor Hall · Visits</title>
+    <style>
+      :root {
+        --ink: #1f2b33;
+        --muted: #62707a;
+        --line: #d3dbe0;
+        --page: #f4f7f8;
+        --positive: #2c6a4a;
+      }
+      body {
+        margin: 0;
+        font: 15px system-ui, sans-serif;
+        color: var(--ink);
+        background: var(--page);
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 36px 20px;
+      }
+      iframe {
+        width: 100%;
+        height: 320px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      #booking-status {
+        color: var(--positive);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Harbor Hall</h1>
+      <p>Group visits to the old harbor hall run every day except Monday.</p>
+      <iframe src="iframe_booking_frame.html" title="Booking form"></iframe>
+      <p id="booking-status" role="status"></p>
+    </main>
+  </body>
+</html>

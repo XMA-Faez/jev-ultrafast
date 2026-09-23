@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Booking form</title>
+    <style>
+      :root {
+        --ink: #1f2b33;
+        --line: #d3dbe0;
+        --surface: #ffffff;
+        --accent: #22506b;
+        --warning: #9a3b25;
+      }
+      body {
+        margin: 0;
+        padding: 20px;
+        font: 15px system-ui, sans-serif;
+        color: var(--ink);
+        background: var(--surface);
+      }
+      form {
+        display: grid;
+        gap: 16px;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+      }
+      input[type="date"] {
+        font: inherit;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        width: 220px;
+      }
+      button {
+        font: inherit;
+        justify-self: start;
+        padding: 9px 18px;
+        color: var(--surface);
+        background: var(--accent);
+        border: 0;
+        border-radius: 6px;
+      }
+      #problem {
+        color: var(--warning);
+        min-height: 1.2em;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <form id="booking">
+      <label>Visit date <input type="date" id="visit-date" name="date" min="2026-01-01" max="2027-12-31" /></label>
+      <label>Guests <input type="range" id="guests" name="guests" min="1" max="8" step="1" value="2" /></label>
+      <p>Group size: <output id="guest-count" for="guests">2</output></p>
+      <p id="problem" role="alert"></p>
+      <button type="submit">Request booking</button>
+    </form>
+    <script>
+      const form = document.getElementById("booking");
+      const guests = document.getElementById("guests");
+      const count = document.getElementById("guest-count");
+      guests.addEventListener("input", () => (count.textContent = guests.value));
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const date = form.elements.date.value;
+        if (!date) {
+          document.getElementById("problem").textContent = "Choose a visit date first.";
+          return;
+        }
+        document.getElementById("problem").textContent = "";
+        parent.history.replaceState(null, "", `?${new URLSearchParams({ date, guests: guests.value })}`);
+        parent.document.getElementById("booking-status").textContent =
+          `Booking requested for ${guests.value} guests on ${date}`;
+      });
+    </script>
+  </body>
+</html>
