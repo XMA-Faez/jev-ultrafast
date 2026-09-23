@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tasks:
+        description: Comma-separated benchmark tasks (empty runs all)
+        required: false
+        default: ""
+      repeat:
+        description: Runs per task
+        required: false
+        default: "1"
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - run: uv sync --all-extras
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+        env:
+          JEV_SKIP_BROWSER_TESTS: "1"
+      - run: node --check jev_ultrafast/static/app.js
+      - run: node --check jev_ultrafast/snapshot.js
+      - run: uv build
+
+  browser:
+    runs-on: ubuntu-latest
+    env:
+      JEV_CHROME_PATH: google-chrome
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv sync --all-extras
+      - run: uv run pytest -q tests/browser
+
+  benchmark:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [checks, browser]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      JEV_CHROME_PATH: google-chrome
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      BENCH_TASKS: ${{ inputs.tasks }}
+      BENCH_REPEAT: ${{ inputs.repeat }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv sync --all-extras
+      - name: Run benchmark
+        run: |
+          task_arguments=()
+          if [ -n "$BENCH_TASKS" ]; then task_arguments=(--tasks "$BENCH_TASKS"); fi
+          uv run python -m bench.run --headless --repeat "${BENCH_REPEAT:-1}" "${task_arguments[@]}" --out artifacts/bench/ci
+      - name: Render scorecard
+        if: always()
+        run: uv run python -m bench.report artifacts/bench/ci --output artifacts/bench/ci/benchmark.md
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark
+          path: artifacts/bench
+          if-no-files-found: warn
