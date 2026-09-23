@@ -43,11 +43,22 @@ Find one-way flights from Zurich to London on September 20, 2026, for one adult 
             Start demo <span>↗</span>
           </button>
         </div>
+        <div class="task-options">
+          <label for="pause-before">Pause before</label
+          ><input
+            type="text"
+            id="pause-before"
+            name="pause_before"
+            placeholder="Comma-separated words from action labels, e.g. search, book"
+            autocomplete="off"
+          />
+        </div>
       </form>
       <div class="toolbar">
         <div class="status">
           <span class="dot" id="status-dot"></span
-          ><span id="status" role="status">Ready to explore</span>
+          ><span id="status" role="status">Ready to explore</span
+          ><span id="verifier" class="verifier" hidden></span>
         </div>
         <div class="controls"><label class="overlay-control"><input name="pace" id="pace" type="checkbox"> Slow motion</label>
           <label class="overlay-control"
@@ -55,8 +66,9 @@ Find one-way flights from Zurich to London on September 20, 2026, for one adult 
             Targets</label
           ><button type="button" id="choose" disabled>Choose next</button
           ><button type="button" id="execute" disabled>Execute choice</button
+          ><button type="button" id="skip" hidden>Skip</button
           ><button type="button" id="auto" disabled>Run automatically</button
-          ><button type="button" id="stop" hidden>Pause</button>
+          ><button type="button" id="stop" hidden>Stop</button>
         </div>
       </div>
       <div id="error" role="alert" hidden></div>

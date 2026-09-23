@@ -3,6 +3,8 @@ const token = document.querySelector('meta[name="demo-token"]').content;
 let state = null,
   busy = false,
   automatic = false;
+const stoppedStatuses = ["done", "blocked", "paused"];
+const isPaused = () => state?.status === "paused";
 const goals = {
   flights: 'Find one-way flights from Zurich to London on September 20, 2026, for one adult in economy. Stop when matching flight options are visible. Do not select or book a flight.',
   travel: 'Find a Design stay in Lisbon with Free cancellation and open Casa Flora.',
@@ -32,12 +34,17 @@ async function call(name, body = {}) {
 }
 function controls() {
   const live = state?.page && !["done", "blocked"].includes(state.status);
+  const paused = isPaused();
   $("start").disabled = busy;
   $("scenario").disabled = busy;
   $("goal").disabled = busy;
-  $("choose").disabled = busy || !live;
-  $("execute").disabled = busy || !state?.decision || !live;
-  $("auto").disabled = busy || !live;
+  $("pause-before").disabled = busy;
+  $("choose").disabled = busy || !live || paused;
+  $("execute").disabled = busy || !live || (!paused && !state?.decision);
+  $("execute").textContent = paused ? "Approve" : "Execute choice";
+  $("skip").hidden = !paused;
+  $("skip").disabled = busy;
+  $("auto").disabled = busy || !live || paused;
   $("auto").hidden = automatic;
   $("stop").hidden = !automatic;
   $("download").disabled = !state?.history?.length;
@@ -60,11 +67,26 @@ async function perform(fn, label) {
     }
     $("error").textContent = error.message;
     $("error").hidden = false;
-    $("status").textContent = "Paused · needs attention";
+    $("status").textContent = "Stopped · needs attention";
   } finally {
     busy = false;
     controls();
   }
+}
+function renderVerification(verification) {
+  const label = $("verifier");
+  label.hidden = !verification;
+  if (!verification) return;
+  label.textContent = `Verifier ${percent(verification.probability)}`;
+  label.classList.toggle("rejected", !verification.accepted);
+  label.title = verification.accepted
+    ? "The verifier accepted Jev's DONE"
+    : "The verifier did not accept Jev's DONE";
+}
+function historyRow(h) {
+  if (h.kind === "note")
+    return `<div class="trace-row note"><span class="number">·</span><div>${escape(h.action)}</div></div>`;
+  return `<div class="trace-row"><span class="number">${escape(String(h.step).padStart(2, "0"))}</span><div>${escape(h.action)}${h.text ? ` <b>“${escape(h.text)}”</b><small>${escape(h.text_helper)}</small>` : ""}</div><span class="time">${escape(h.latency_ms)} ms · ${escape(percent(h.probability))}</span><span class="effect">${h.page_changed ? "Page changed" : "No change observed"}</span></div>`;
 }
 function render() {
   if (!state) return;
@@ -78,15 +100,17 @@ function render() {
   const page = state.page,
     d =
       state.decision ||
-      (state.status === "done" ? state.decisions?.at(-1) : null);
+      (["done", "paused"].includes(state.status) ? state.decisions?.at(-1) : null);
   const labels = {
     idle: "Ready to explore",
     ready: "Page observed · ready for a decision",
     predicted: "Choice ready · inspect or execute",
+    paused: `Paused before: ${state.pending?.label ?? "the chosen action"} · approve or skip`,
     done: "Jev reports complete · inspect the page",
-    blocked: "Stopped · no supported next action",
+    blocked: `Stopped · ${state.reason || "no supported next action"}`,
   };
   $("status").textContent = labels[state.status] || state.status;
+  renderVerification(state.verification);
   if (!page) {
     controls();
     return;
@@ -118,21 +142,20 @@ function render() {
     return `<div class="choice ${selectedIndex === e.index ? 'best' : ''}" data-action="${escape(e.index)}"><span class="choice-id">[${escape(e.index)}]</span><div class="choice-label">${escape(e.label)}<small>${escape(e.role)} · ${escape(e.operations.join(' / '))}${e.value ? ' · '+escape(e.value) : ''}${e.checked !== undefined ? ' · checked '+escape(e.checked) : ''}</small>${p >= 0 ? `<div class="bar" style="--probability:${p*100}%"></div>` : ''}</div><span class="probability">${p >= 0 ? percent(p) : '—'}</span></div>`;
   }).join('');
   const targets = new Map();
-  for (const a of page.actions) if (a.rect && !targets.has(a.node)) targets.set(a.node, a);
+  for (const a of page.actions) {
+    const elementKey = `${a.frame ?? ''}:${a.node}`;
+    if (a.rect && a.node != null && !targets.has(elementKey)) targets.set(elementKey, a);
+  }
   $("targets").innerHTML = [...targets.values()].map((a,i) => {
     const index=String(i+1);
     return `<div class="target ${index === selectedIndex ? 'selected' : ''}" data-action="${index}" style="left:${100*a.rect.x/page.w}%;top:${100*a.rect.y/page.h}%;width:${100*a.rect.w/page.w}%;height:${100*a.rect.h/page.h}%"><span>${index}</span></div>`;
   }).join('');
   $("targets").hidden = !$("overlays").checked;
   $("history").innerHTML = state.history.length
-    ? state.history
-        .map(
-          (h) =>
-            `<div class="trace-row"><span class="number">${String(h.step).padStart(2, "0")}</span><div>${escape(h.action)}${h.text ? ` <b>“${escape(h.text)}”</b><small>${escape(h.text_helper)}</small>` : ""}</div><span class="time">${h.latency_ms} ms · ${percent(h.probability)}</span><span class="effect">${h.page_changed ? "Page changed" : "No change observed"}</span></div>`,
-        )
-        .join("")
+    ? state.history.map(historyRow).join("")
     : '<p class="muted">Each executed action leaves an observed result.</p>';
-  $("step-count").textContent = `${state.history.length} actions · ${(state.elapsed_ms / 1000).toFixed(2)} s`;
+  const executedCount = state.history.filter((h) => h.kind !== "note").length;
+  $("step-count").textContent = `${executedCount} actions · ${(state.elapsed_ms / 1000).toFixed(2)} s`;
   $("model-state").textContent = JSON.stringify(
     d?.request || {
       goal: state.goal,
@@ -150,7 +173,11 @@ $("task-form").addEventListener("submit", (event) => {
   automatic = false;
   perform(
     () =>
-      call("reset", { scenario: $("scenario").value, goal: $("goal").value }),
+      call("reset", {
+        scenario: $("scenario").value,
+        goal: $("goal").value,
+        pause_before: $("pause-before").value,
+      }),
     "Opening a fresh browser…",
   );
 });
@@ -161,10 +188,15 @@ $("choose").addEventListener("click", () =>
   perform(() => call("predict"), "Jev is comparing the actions…"),
 );
 $("execute").addEventListener("click", () =>
-  perform(
-    () => call("act", { fingerprint: state.page.fingerprint }),
-    "Executing the choice…",
-  ),
+  isPaused()
+    ? perform(() => call("approve"), "Approving the paused action…")
+    : perform(
+        () => call("act", { fingerprint: state.page.fingerprint }),
+        "Executing the choice…",
+      ),
+);
+$("skip").addEventListener("click", () =>
+  perform(() => call("reject"), "Skipping the paused action…"),
 );
 $("auto").addEventListener("click", () =>
   perform(async () => {
@@ -180,14 +212,14 @@ $("auto").addEventListener("click", () =>
       } else {
         await call("tick");
       }
-      if (["done", "blocked"].includes(state.status)) break;
+      if (stoppedStatuses.includes(state.status)) break;
     }
     automatic = false;
   }, "Running the browser…"),
 );
 $("stop").addEventListener("click", () => {
   automatic = false;
-  $("status").textContent = "Pausing after the current request…";
+  $("status").textContent = "Stopping after the current request…";
   controls();
 });
 $("overlays").addEventListener("change", () => {
