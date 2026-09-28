@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Saved places</title>
+<style>
+  body { margin: 0; overflow: hidden; font: 16px sans-serif; }
+  .panel { position: fixed; left: 0; top: 0; width: 320px; height: 400px; overflow-y: auto; background: white; }
+  .row { display: flex; align-items: center; height: 72px; padding: 0 12px; cursor: pointer; }
+  .row .info { flex: 1; }
+  .more { width: 32px; height: 32px; }
+  .wrapped { cursor: pointer; }
+  .wrapped button { width: 100%; }
+  .map { position: fixed; left: 320px; top: 0; right: 0; height: 2000px; background: #cde; }
+</style>
+</head>
+<body>
+<div class="panel" aria-label="Saved places">
+  <div class="wrapped"><button onclick="window.created=true">Create folder</button></div>
+  <div class="row" style="cursor:pointer"></div>
+  <div id="rows"></div>
+</div>
+<div class="map" id="map"></div>
+<script>
+  const folders = ['Favorites', 'Cafe', 'Bar', 'Restaurant', 'Sights', 'Museums', 'Parks', 'Hotels'];
+  const rows = document.getElementById('rows');
+  folders.forEach((folder, index) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<div class="info"><div></div><div>' + (index + 2) + ' places</div></div>' +
+      '<button class="more" aria-label="More"></button>';
+    row.querySelector('.info div').textContent = folder;
+    row.addEventListener('click', () => { window.opened = folder; });
+    row.querySelector('.more').addEventListener('click', event => {
+      event.stopPropagation();
+      window.more = folder;
+    });
+    rows.append(row);
+  });
+  window.mapWheels = 0;
+  document.getElementById('map').addEventListener('wheel', () => { window.mapWheels += 1; });
+</script>
+</body>
+</html>

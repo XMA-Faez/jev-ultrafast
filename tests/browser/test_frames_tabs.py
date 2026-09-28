@@ -58,6 +58,20 @@ def test_click_that_navigates_is_observed_on_the_new_document(open_browser, serv
     assert browser.fresh(page)
 
 
+@pytest.mark.parametrize("suffix", ["?from=navigate", "?delay=400"])
+def test_navigate_loads_a_new_url_in_the_same_tab(open_browser, served, suffix):
+    browser = open_browser(url=served + "navigate.html")
+    tab, tabs_before = browser.target, live_page_targets()
+
+    browser.navigate(served + "popup_target.html" + suffix)
+
+    assert browser.evaluate("document.title") == "Popup target"
+    assert browser.target == tab
+    assert live_page_targets() == tabs_before
+    page = browser.observe(screenshot=False)
+    assert "Arrived at the target page" in page["text"]
+
+
 @pytest.mark.parametrize(
     ("control", "suffix"),
     [("Open in new tab", "?via=link"), ("Open popup window", "?via=open"), ("Open popup later", "?via=late")],

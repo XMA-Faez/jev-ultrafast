@@ -68,6 +68,40 @@
     }
     return null;
   };
+  const computedStyles=new Map();
+  const styleOf = e => {
+    if (!computedStyles.has(e)) computedStyles.set(e,getComputedStyle(e));
+    return computedStyles.get(e);
+  };
+  const startsPointerCursor = e => {
+    if (styleOf(e).cursor!=='pointer') return false;
+    const parent=composedParent(e);
+    return !parent || styleOf(parent).cursor!=='pointer';
+  };
+  const implicitlyClickable = e => {
+    if (e===document.documentElement || e===document.body) return false;
+    const focusable=e.hasAttribute('tabindex') && e.tabIndex>=0;
+    if (!e.hasAttribute('onclick') && !(styleOf(e).cursor==='pointer' && (focusable || startsPointerCursor(e))))
+      return false;
+    if (e.tagName==='LABEL' && e.control && visible(e.control)) return false;
+    const parent=composedParent(e);
+    return !parent || !composedClosest(parent,selector);
+  };
+  const coveredByDescendantControl = (e,r) => queryComposed(selector,e).some(child => {
+    const cr=child.getBoundingClientRect();
+    return cr.width*cr.height>=0.8*r.width*r.height;
+  });
+  const ownVisibleText = e => [...composedTextNodes(e)].filter(node => {
+    const parent=node.parentElement || node.parentNode?.host;
+    return parent && !parent.closest('script,style,noscript,template') && !composedClosest(parent,selector) &&
+      visible(parent);
+  }).map(node=>node.textContent.trim()).filter(Boolean).join(' ');
+  const implicitName = e => (e.getAttribute('aria-label') || ownVisibleText(e) || e.getAttribute('title') || '')
+    .replace(/\s+/g,' ').trim().slice(0,120);
+  const firstTextLine = (e,excluding='') => ((e.innerText||'').split('\n').map(line=>line.trim())
+    .find(line=>line && line!==excluding) || '').slice(0,60);
+  const scrollsVertically = e => e!==document.documentElement && e!==document.body && e.tagName!=='TEXTAREA' &&
+    ['auto','scroll','overlay'].includes(styleOf(e).overflowY) && e.scrollHeight>e.clientHeight+2;
   const nativeFormat = e => {
     if (e.tagName!=='INPUT') return null;
     if (e.type==='range') return 'number '+(e.min||'0')+'..'+(e.max||'100')+' step '+(e.step||'1');
@@ -102,13 +136,18 @@
     return {x,y};
   };
   const frame_offset=window.frameElement ? cache.toTop(0,0,false) : null, offset=frame_offset || {x:0,y:0};
-  const actions=[];
-  for (const e of queryComposed(selector)) {
+  const actions=[], scrollers=[];
+  for (const e of queryComposed('*')) {
+    if (scrollsVertically(e)) scrollers.push(e);
+    const semantic=e.matches(selector);
+    if (!semantic && !implicitlyClickable(e)) continue;
     if (!safe(e) || !visible(e) || e.matches(':disabled') || composedClosest(e,'[aria-disabled="true"]')) continue;
-    const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2, rname=role(e);
+    const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2, rname=semantic ? role(e) : 'button';
     if (!rname || r.width<=0 || r.height<=0 || x<0 || y<0 || x>=innerWidth || y>=innerHeight) continue;
     if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
-    const base={node:identity(e),role:rname,label:name(e)||rname,
+    const label=semantic ? name(e) : implicitName(e);
+    if (!semantic && (!label || coveredByDescendantControl(e,r))) continue;
+    const base={node:identity(e),role:rname,label:label||rname,
       rect:{x:r.x+offset.x,y:r.y+offset.y,w:r.width,h:r.height}};
     for (const key of ['checked','selected','expanded']) {
       const value=e.getAttribute('aria-'+key);
@@ -132,6 +171,25 @@
         actions.push({...base,kind:'click',value,label:'Open '+base.label});
     }
   }
+  const nodesByLabel=new Map();
+  for (const a of actions) if (a.kind!=='select') {
+    if (!nodesByLabel.has(a.label)) nodesByLabel.set(a.label,new Set());
+    nodesByLabel.get(a.label).add(a.node);
+  }
+  const surroundingItemText = (e,label,twins) => {
+    for (let n=composedParent(e); n && n!==document.body; n=composedParent(n)) {
+      if (twins.some(twin=>twin!==e && n.contains(twin))) return '';
+      const line=firstTextLine(n,label);
+      if (line) return line;
+    }
+    return '';
+  };
+  for (const a of actions) {
+    const twins=a.kind==='select' ? null : nodesByLabel.get(a.label);
+    if (!twins || twins.size<2) continue;
+    const context=surroundingItemText(cache.nodes.get(a.node),a.label,[...twins].map(id=>cache.nodes.get(id)));
+    if (context) a.label+=' ('+context+')';
+  }
   const words=[], range=document.createRange(); let length=0;
   for (const node of composedTextNodes(document.body)) {
     if (length>=6000) break;
@@ -154,8 +212,30 @@
   const omitted_actions=Math.max(0,actions.length-250);
   actions.splice(250);
   actions.forEach((a,i)=>a.id='e'+(i+1));
-  if (scrollY+innerHeight<height-2) actions.push({id:'scroll_down',kind:'scroll',label:'Scroll down',delta:560});
-  if (scrollY>0) actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
+  const rootOverflow=styleOf(document.documentElement).overflowY;
+  const viewportOverflow=rootOverflow==='visible' ? styleOf(document.body).overflowY : rootOverflow;
+  const viewportScrolls=!['hidden','clip'].includes(viewportOverflow);
+  if (viewportScrolls && scrollY+innerHeight<height-2)
+    actions.push({id:'scroll_down',kind:'scroll',label:'Scroll down',delta:560});
+  if (viewportScrolls && scrollY>0) actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
+  const visibleArea = e => {
+    const r=e.getBoundingClientRect();
+    const w=Math.min(r.right,innerWidth)-Math.max(r.left,0), h=Math.min(r.bottom,innerHeight)-Math.max(r.top,0);
+    return w>=40 && h>=40 ? w*h : 0;
+  };
+  const scrollAreas=scrollers.filter(e=>visible(e) && visibleArea(e))
+    .sort((a,b)=>visibleArea(b)-visibleArea(a)).slice(0,3);
+  scrollAreas.forEach((e,i) => {
+    const r=e.getBoundingClientRect(), center=(Math.max(r.left,0)+Math.min(r.right,innerWidth))/2;
+    const side=center<innerWidth/3 ? 'left' : center>innerWidth*2/3 ? 'right' : 'middle';
+    const heading=e.getAttribute('aria-label') || firstTextLine(e);
+    const where='the '+side+' scrollable area'+(heading ? ' ("'+heading+'")' : '');
+    const step=Math.max(100,Math.round(e.clientHeight*0.8)), container=identity(e);
+    if (e.scrollTop+e.clientHeight<e.scrollHeight-2)
+      actions.push({id:'scroll_down_in_'+(i+1),kind:'scroll',container,label:'Scroll down inside '+where,delta:step});
+    if (e.scrollTop>0)
+      actions.push({id:'scroll_up_in_'+(i+1),kind:'scroll',container,label:'Scroll up inside '+where,delta:-step});
+  });
   actions.push({id:'press_enter',kind:'key',key:'Enter',label:'Press Enter in the focused field'},
     {id:'press_escape',kind:'key',key:'Escape',label:'Press Escape to close a menu or dialog'});
   const listFocused=focused && (['combobox','listbox','option'].includes(focused.getAttribute('role')) ||

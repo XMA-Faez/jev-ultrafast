@@ -21,6 +21,7 @@ MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})
 KEY_CODES = {"Enter": 13, "Escape": 27, "ArrowDown": 40, "ArrowUp": 38}
 SETTLE_SECONDS = 1.0
 NEW_TAB_SECONDS = 3.0
+NAVIGATION_SECONDS = 15.0
 MAX_ACTIONS = 250
 CONTEXT_GONE = ("Cannot find context", "Execution context was destroyed")
 DOCUMENT_COMPLETE = """(limit => new Promise(resolve => {
@@ -29,6 +30,7 @@ DOCUMENT_COMPLETE = """(limit => new Promise(resolve => {
   setTimeout(()=>resolve(false),limit);
   check();
 }))(%d)"""
+DOCUMENT_READY = "document.readyState==='complete'"
 NEW_TAB_READY = (
     "document.readyState==='complete' && (location.href!=='about:blank' || document.body?.childNodes.length>0)"
 )
@@ -54,7 +56,26 @@ AFTER_INPUT_WAIT = """(action => new Promise(resolve => {
   };
   requestAnimationFrame(ready);
 }))(%s)"""
-NODE_GUARD = "(() => { const c=window.__jevFast; return c ? [c.pageKey(),c.guard(c.nodes.get(%d))] : null; })()"
+SCROLL_AREA = """(action => {
+  const area=window.__jevFast?.nodes.get(action.container);
+  if (!area?.isConnected || !area.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
+  const r=area.getBoundingClientRect();
+  const left=Math.max(r.left,0), right=Math.min(r.right,innerWidth);
+  const top=Math.max(r.top,0), bottom=Math.min(r.bottom,innerHeight);
+  if (right<=left || bottom<=top) return null;
+  const x=(left+right)/2, y=(top+bottom)/2;
+  let hit=document.elementFromPoint(x,y);
+  while (hit?.shadowRoot) {
+    const inner=hit.shadowRoot.elementFromPoint(x,y);
+    if (!inner || inner===hit) break;
+    hit=inner;
+  }
+  for (let n=hit; n; n=n.assignedSlot || n.parentElement || n.getRootNode().host || null)
+    if (n===area) return {x,y};
+  area.scrollBy({top:action.delta});
+  return {scrolled:true};
+})(%s)"""
+NODE_GUARD ="(() => { const c=window.__jevFast; return c ? [c.pageKey(),c.guard(c.nodes.get(%d))] : null; })()"
 
 
 class StalePage(ValueError):
@@ -72,11 +93,16 @@ class Browser:
         self.target = cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
         self.seen_targets = {self.target}
         self.session = attach_tab(self.target)
-        self.call("Page.navigate", url=url)
-        self.wait_until("document.readyState==='complete'", 15)
+        self.navigate(url)
 
     def call(self, method, **params):
         return cdp(method, session_id=self.session, **params)
+
+    def navigate(self, url):
+        """Load `url` in the current tab. Page.navigate returns once the new document has committed."""
+        self.call("Page.navigate", url=url)
+        self.after_input, self.frame_contexts = None, {}
+        self.wait_until(DOCUMENT_READY, NAVIGATION_SECONDS)
 
     def evaluate(self, expression, frame=None):
         response = self.evaluate_in(frame, expression=expression, returnByValue=True)
@@ -354,7 +380,22 @@ def browser_operation(request):
     if operation == "act":
         action = request["action"]
         kind = action["kind"]
-        if kind == "scroll":
+        if kind == "scroll" and "container" in action:
+            if type(action["container"]) is not int:
+                raise ValueError("Invalid observed scroll area")
+            wheel_point = evaluate(SCROLL_AREA % json.dumps(action))
+            if wheel_point is None:
+                raise StalePage("Scroll area changed or is hidden. Observe again.")
+            if "x" in wheel_point:
+                call(
+                    "Input.dispatchMouseEvent",
+                    type="mouseWheel",
+                    x=wheel_point["x"],
+                    y=wheel_point["y"],
+                    deltaX=0,
+                    deltaY=action["delta"],
+                )
+        elif kind == "scroll":
             call("Input.dispatchMouseEvent", type="mouseWheel", x=550, y=650, deltaX=0, deltaY=action["delta"])
         elif kind == "key":
             key = action["key"]

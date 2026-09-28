@@ -28,7 +28,7 @@ Every observation produces a new element table:
 ...
 ```
 
-The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `PRESS_ENTER`, `PRESS_ESCAPE`, `ARROW_UP`/`ARROW_DOWN` (only in an open list), `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `DONE`, and `BLOCKED`. Only supported operations and targets are offered. Date, time, range, and color inputs take a formatted value through `TYPE_TEXT`.
+The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `PRESS_ENTER`, `PRESS_ESCAPE`, `ARROW_UP`/`ARROW_DOWN` (only in an open list), `SCROLL_UP`, `SCROLL_DOWN` (only when the page itself can scroll), `SCROLL_UP_IN_<n>`/`SCROLL_DOWN_IN_<n>` (the three largest visible overflowing panels, such as a map's side list), `WAIT`, `DONE`, and `BLOCKED`. Only supported operations and targets are offered. Besides buttons, links, inputs and ARIA roles, a click target can be a row that is clickable only through script: it starts a `cursor:pointer` region, carries an `onclick` attribute, or is focusable with `tabindex>=0` and a pointer cursor. Repeated labels such as several `More` buttons get the text of their own row, as in `More (Bar)`. Date, time, range, and color inputs take a formatted value through `TYPE_TEXT`.
 
 ```text
                       one TypeSafe request
@@ -124,7 +124,11 @@ Client configuration:
 {"mcpServers": {"jev-browser": {"command": "uv", "args": ["--directory", "/path/to/jev-ultrafast", "run", "jev-mcp"]}}}
 ```
 
-Tools: `browser_task` (goal or goals, optional `url`, `session_id`, `pause_before`, `extract`, `headless`), `browser_approve`, `browser_reject`, `browser_read`, `browser_screenshot`, `browser_sessions`, `browser_close`. Results carry `status`, `reason`, `verification`, `extracted`, the executed steps, the final page text, and `trace_path`. On Linux, a native Brave or Chrome profile that Browser Harness does not scan is found through its `DevToolsActivePort` file.
+Tools: `browser_task` (goal or goals, optional `url`, `session_id`, `pause_before`, `extract`, `headless`), `browser_approve`, `browser_reject`, `browser_read`, `browser_screenshot`, `browser_sessions`, `browser_close`. Results carry `status`, `reason`, `verification`, `extracted`, the executed steps, the final page text, and `trace_path`.
+
+Each session owns one background tab. Passing `session_id` with a `url` loads that URL in the same tab, so follow-up work does not open new tabs. A tab left unused for `JEV_MCP_IDLE_MINUTES` (default 10) closes on its own. At most `JEV_MCP_MAX_SESSIONS` (default 3) stay open: opening one more closes the least recently used idle tab, and a tab in use is never closed. A call on a closed session returns an error that says why it was closed.
+
+On Linux, a native Brave or Chrome profile that Browser Harness does not scan is found through its `DevToolsActivePort` file.
 
 ## Why it moves
 
@@ -163,7 +167,7 @@ In six alternating runs with identical models and settings, both versions passed
 
 The same policy opened the requested Wikipedia article in **2.798 s** and passed a local hotel search/filter task in **1.896 s**. Runs, failures, source hashes, and measurement boundaries are in [performance.md](docs/performance.md).
 
-A `DONE` choice still requires independent outcome verification; the built-in verifier is a second opinion, not proof. The DOM reader handles common HTML and ARIA controls, open shadow roots, same-origin iframes, and tabs or pop-ups opened by the page. It does not implement the full accessible-name specification. Cross-origin iframes are counted and skipped ([design note](docs/frames.md)). Canvas, uploads, nested scrolling, closed shadow roots, and arbitrary keyboard widgets remain unsupported. Attached mode shares the existing Chrome profile.
+A `DONE` choice still requires independent outcome verification; the built-in verifier is a second opinion, not proof. The DOM reader handles common HTML and ARIA controls, open shadow roots, same-origin iframes, and tabs or pop-ups opened by the page. It does not implement the full accessible-name specification. Cross-origin iframes are counted and skipped ([design note](docs/frames.md)). Canvas, uploads, custom scrollers that do not use CSS overflow, closed shadow roots, and arbitrary keyboard widgets remain unsupported. Attached mode shares the existing Chrome profile.
 
 A broader task suite lives in [bench/](bench): public sites and local pages for keyboard submit, shadow DOM, iframes, pop-ups, native inputs, and checkpoints. Results appear in [benchmark.md](docs/benchmark.md) only after a recorded run.
 

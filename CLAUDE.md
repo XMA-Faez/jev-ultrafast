@@ -14,6 +14,7 @@ Read AGENTS.md and README.md first. AGENTS.md invariants are hard rules.
 - Browser Harness binds its daemon name (`BU_NAME`) at import, so `jev_ultrafast/browser.py` imports it lazily through a module-level `cdp` wrapper. Tests monkeypatch `browser.cdp`.
 - Headless and test browsers come from `jev_ultrafast/launch.py`: a private Chrome with `--remote-debugging-port=0`, attached via `BU_CDP_URL` and a per-process `BU_NAME`. It never touches the user's default daemon.
 - CDP events are not used: the harness only exposes a shared, destructive event buffer. Poll instead.
+- MCP tabs are bounded (2026-09-26): `browser_task` with `session_id` + `url` navigates the same tab; a daemon thread closes sessions idle past `JEV_MCP_IDLE_MINUTES` (10); opening beyond `JEV_MCP_MAX_SESSIONS` (3) closes the least recently used idle session. Busy sessions are never closed; closed-session reasons are kept for the error message.
 - Plan of record: `~/.claude/plans/come-up-with-a-spicy-dolphin.md` (stages 0–4).
 
 ## Preferences & Rules
@@ -31,6 +32,10 @@ Read AGENTS.md and README.md first. AGENTS.md invariants are hard rules.
 - ❌ Polling for new tabs once right after a click missed pop-ups opened late (flaky test, 1 in 20) → ✅ poll on every observation; it costs ~0.2 ms.
 - ❌ Asserting a tab is gone right after `Target.closeTarget` is racy → ✅ poll the target list briefly in tests.
 - ❌ A fixed date in a benchmark goal expires → ✅ bench tasks compute dates relative to the run; historical examples keep their recorded dates.
+- ❌ The MCP opened a new tab per task and never closed them (user report, 2026-09-26) → ✅ reuse the session's tab for new URLs, close idle tabs, cap open tabs.
+- ❌ Guarding `Page.navigate` against reading the old document → ✅ unnecessary: `Page.navigate` returns after the new document commits (tested with a slow server).
+- ❌ Indexing only semantic elements missed Yandex Maps folder rows (div role=listitem, tabindex=0, cursor:pointer); the model clicked the five identical `More` buttons instead (user report, 2026-09-28) → ✅ snapshot.js infers script-only click targets and appends row text to repeated labels (`More (Bar)`).
+- ❌ Page `SCROLL_DOWN` wheeled at (550,650) over the map and zoomed it while the side list never moved; it was offered because body content overflowed a `overflow:hidden` viewport (2026-09-28) → ✅ page scroll only when the viewport can scroll; overflowing panels get `scroll_down_in_<n>` actions targeted by node.
 - ❌ Registering pytest options in `tests/browser/conftest.py` fails in full runs → ✅ `pytest_addoption` lives in `tests/conftest.py`.
 
 ## Dependencies & Tooling

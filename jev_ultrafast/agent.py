@@ -314,8 +314,11 @@ class Agent:
         self.note(f"user rejected: {pending['label']}")
         return self.snapshot()
 
-    def restart(self, goals, *, pause_before=None, extract=None):
-        """Start new goal(s) on the same tab with a clean run history; given options replace the current ones."""
+    def restart(self, goals, *, url=None, pause_before=None, extract=None):
+        """Start new goal(s) on the same tab with a clean run history, first loading `url` when given.
+
+        Given options replace the current ones.
+        """
         plan = goal_list(goals)
         if extract is not None:
             if not isinstance(extract, dict) or not extract:
@@ -323,6 +326,9 @@ class Agent:
             self.extract = extract
         if pause_before is not None:
             self.pause_before = [pause_before] if isinstance(pause_before, str) else list(pause_before)
+        if url:
+            self.state["browser"].navigate(url)
+            self.state["page"] = self.observe_page()
         self.state.update(
             goal=plan[0],
             plan=plan,
@@ -342,7 +348,7 @@ class Agent:
             done_rejections=0,
         )
         self.pending_text = None
-        self.emit("note", text="restart", plan=plan)
+        self.emit("note", text="restart", plan=plan, url=url)
         return self.snapshot()
 
     def execute(self, decision, page):

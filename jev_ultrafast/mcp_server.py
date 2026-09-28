@@ -31,6 +31,7 @@ PAGE_TEXT_LIMIT = 6000
 DEFAULT_TIME_BUDGET_SECONDS = 120
 STOPPED_STATUSES = {"done", "blocked", "paused"}
 STEP_FIELDS = ("step", "kind", "action", "text", "page_changed", "url")
+IDLE_CHECK_SECONDS = 30
 
 server = MCPServer(
     "jev-browser",
@@ -46,7 +47,10 @@ server = MCPServer(
         "'buy', 'send', 'delete'): the task returns status 'paused' with the pending action. Ask the user, "
         "then call browser_approve to execute it or browser_reject to skip it and let Jev choose again. "
         "Pass extract={key: description} to get named values read from the final page in 'extracted'. "
-        "Reuse session_id to continue on the same tab; a session handles one call at a time. "
+        "Reuse session_id for follow-up work on the same tab, even on another site: pass url with session_id "
+        "to load it there instead of opening a new tab. A session handles one call at a time. "
+        "Call browser_close when you no longer need a tab. Tabs unused for a while close on their own, "
+        "and opening a tab beyond the limit closes the least recently used idle one. "
         "Supported: clicks, typing, native selects, date and range inputs, Enter/Escape/arrow keys, scrolling, "
         "same-origin iframes, open shadow DOM, pop-up tabs. Not supported: cross-origin iframes, "
         "file uploads, canvas."
@@ -58,6 +62,7 @@ server = MCPServer(
 class Session:
     agent: Agent
     lock: threading.Lock = field(default_factory=threading.Lock)
+    last_used: float = field(default_factory=time.monotonic)
 
 
 class SessionBusy(RuntimeError):
@@ -65,6 +70,7 @@ class SessionBusy(RuntimeError):
 
 
 sessions: dict[str, Session] = {}
+closed_session_reasons: dict[str, str] = {}
 sessions_lock = threading.Lock()
 
 
@@ -81,7 +87,10 @@ def claimed_session(session_id: str):
     with sessions_lock:
         session = sessions.get(session_id)
         open_ids = sorted(sessions)
+        closed_reason = closed_session_reasons.get(session_id)
     if session is None:
+        if closed_reason:
+            raise ValueError(f"Session {session_id} was closed ({closed_reason}). Start a new task without it.")
         raise ValueError(f"No open session {session_id!r}. Open sessions: {open_ids or 'none'}")
     if not session.lock.acquire(blocking=False):
         raise SessionBusy(f"Session {session_id} is busy with another call")
@@ -92,7 +101,64 @@ def claimed_session(session_id: str):
             raise ValueError(f"Session {session_id} was closed")
         yield session.agent
     finally:
+        release_after_use(session)
+
+
+def release_after_use(session: Session):
+    session.last_used = time.monotonic()
+    session.lock.release()
+
+
+def close_claimed_session(session_id: str, session: Session, reason: str) -> bool:
+    """Close a session whose lock the caller holds; False when it was already closed."""
+    with sessions_lock:
+        if sessions.get(session_id) is not session:
+            return False
+        sessions.pop(session_id)
+        closed_session_reasons[session_id] = reason
+    with stdout_kept_for_protocol(), contextlib.suppress(Exception):
+        session.agent.close()
+    return True
+
+
+def close_if_unused(session_id: str, session: Session, reason: str, unused_for_seconds: float = 0) -> bool:
+    """Close a session no call is using and none has used for `unused_for_seconds`."""
+    if not session.lock.acquire(blocking=False):
+        return False
+    try:
+        if time.monotonic() - session.last_used < unused_for_seconds:
+            return False
+        return close_claimed_session(session_id, session, reason)
+    finally:
         session.lock.release()
+
+
+def close_idle_sessions():
+    idle_seconds = settings.mcp_idle_seconds()
+    now = time.monotonic()
+    with sessions_lock:
+        idle = [(session_id, session) for session_id, session in sessions.items()
+                if now - session.last_used >= idle_seconds]
+    for session_id, session in idle:
+        close_if_unused(session_id, session, f"unused for {idle_seconds / 60:g} minutes", idle_seconds)
+
+
+def make_room_for_one_more_session():
+    """Close least recently used idle sessions until one more fits; busy sessions are never closed."""
+    limit = settings.mcp_max_sessions()
+    with sessions_lock:
+        least_recent_first = sorted(sessions.items(), key=lambda item: item[1].last_used)
+    surplus = len(least_recent_first) - limit + 1
+    for session_id, session in least_recent_first:
+        if surplus <= 0:
+            return
+        if close_if_unused(session_id, session, f"closed to keep at most {limit} tabs open"):
+            surplus -= 1
+
+
+def close_idle_sessions_until(stopped: threading.Event):
+    while not stopped.wait(IDLE_CHECK_SECONDS):
+        close_idle_sessions()
 
 
 def page_summary(page: dict) -> dict:
@@ -161,6 +227,8 @@ def error_result(message: str, session_id: str | None = None) -> dict:
 
 
 def open_session(goal, url, headless, pause_before, extract) -> tuple[str, Session]:
+    close_idle_sessions()
+    make_room_for_one_more_session()
     wants_headless = settings.headless() if headless is None else headless
     if not wants_headless:
         use_native_profile_endpoint()
@@ -185,11 +253,13 @@ def browser_task(
 ) -> dict:
     """Run a browser goal (or a list of goals, in order) to completion with Jev choosing every action.
 
-    Start a new tab with `url`, or continue an existing tab with `session_id` (then `url` and `headless`
-    are ignored; `pause_before` and `extract`, when given, replace the session's previous values).
+    Start a new tab with `url`, or continue an existing tab with `session_id`. Prefer continuing: with
+    `session_id`, a given `url` loads in that same tab, `headless` is ignored, and `pause_before` and
+    `extract`, when given, replace the session's previous values.
     `pause_before`: case-insensitive words; an action whose label contains one pauses the run for approval.
     `extract`: {key: description} of values to read from the final page into `extracted`.
-    The tab stays open afterwards so you can continue, read or screenshot it; close it with browser_close.
+    The tab stays open afterwards so you can continue, read or screenshot it; close it with browser_close
+    when done. Unused tabs close on their own after a while, and only a few stay open at once.
     Returns status (done | blocked | paused | error | timeout), reason, pending (when paused), verification,
     extracted, the executed steps (notes included), the final page's visible text and trace_path.
     """
@@ -203,11 +273,11 @@ def browser_task(
                 snapshot, status, error = drive(session.agent, time_budget_seconds)
                 return task_result(session_id, session.agent, snapshot, status, error)
             finally:
-                session.lock.release()
+                release_after_use(session)
         try:
             with claimed_session(session_id) as agent:
                 try:
-                    agent.restart(goal, pause_before=pause_before, extract=extract)
+                    agent.restart(goal, url=url, pause_before=pause_before, extract=extract)
                 except Exception as exc:
                     return error_result(f"Could not start the new goal: {exc}", session_id)
                 snapshot, status, error = drive(agent, time_budget_seconds)
@@ -296,14 +366,18 @@ def browser_close(session_id: str) -> str:
     with stdout_kept_for_protocol(), claimed_session(session_id) as agent:
         with sessions_lock:
             sessions.pop(session_id, None)
+            closed_session_reasons[session_id] = "closed with browser_close"
         agent.close()
         return f"Closed {session_id}"
 
 
 def main():
+    stopped = threading.Event()
+    threading.Thread(target=close_idle_sessions_until, args=(stopped,), name="jev-idle-tabs", daemon=True).start()
     try:
         server.run("stdio")
     finally:
+        stopped.set()
         with stdout_kept_for_protocol(), sessions_lock:
             for session in sessions.values():
                 with contextlib.suppress(Exception):

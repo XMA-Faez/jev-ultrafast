@@ -115,3 +115,30 @@ def test_overlay_inside_a_shadow_root_blocks_the_click(open_browser):
     with pytest.raises(StalePage):
         browser.act(labelled(page, "Apply coupon"), page)
     assert browser.evaluate("window.applied") is None
+
+
+def test_pointer_rows_are_clickable_and_repeated_icon_buttons_name_their_row(open_browser):
+    page = open_browser(page="clickable_rows.html").observe(screenshot=False)
+    labels = [a["label"] for a in page["actions"] if a["kind"] == "click"]
+    assert labels[:5] == ["Create folder", "Favorites 2 places", "More (Favorites)", "Cafe 3 places", "More (Cafe)"]
+    assert labels.count("Create folder") == 1
+    assert not any(label in ("", "button") for label in labels)
+
+
+def test_clicking_a_pointer_row_opens_it_without_touching_its_more_button(open_browser):
+    browser = open_browser(page="clickable_rows.html")
+    page = browser.observe(screenshot=False)
+    browser.act(labelled(page, "Bar 4 places"), page)
+    assert browser.evaluate("[window.opened, window.more ?? null]") == ["Bar", None]
+
+
+def test_scroll_targets_the_overflowing_panel_instead_of_the_page(open_browser):
+    browser = open_browser(page="clickable_rows.html")
+    page = browser.observe(screenshot=False)
+    assert "scroll_down" not in action_ids(page)
+    panel_scroll = next(a for a in page["actions"] if a["id"] == "scroll_down_in_1")
+    assert panel_scroll["label"] == 'Scroll down inside the left scrollable area ("Saved places")'
+    browser.act(panel_scroll, page)
+    assert browser.wait_until("document.querySelector('.panel').scrollTop > 0", 2)
+    assert browser.evaluate("window.mapWheels") == 0
+    assert "scroll_up_in_1" in action_ids(browser.observe(screenshot=False))

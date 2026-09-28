@@ -8,6 +8,8 @@ TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone"
 OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 DEFAULT_TEXT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_TEXT_MODEL = "inception/mercury-2.5"
+DEFAULT_MCP_IDLE_MINUTES = 10
+DEFAULT_MCP_MAX_SESSIONS = 3
 CHROME_CANDIDATES = (
     "chromium",
     "chromium-browser",
@@ -56,6 +58,16 @@ def trace_dir():
 
 def headless():
     return os.environ.get("JEV_HEADLESS", "").lower() in {"1", "true", "yes"}
+
+
+def mcp_idle_seconds():
+    """How long an MCP session may sit unused before its tab is closed."""
+    return float(os.environ.get("JEV_MCP_IDLE_MINUTES", DEFAULT_MCP_IDLE_MINUTES)) * 60
+
+
+def mcp_max_sessions():
+    """How many MCP tabs stay open; opening one more closes the least recently used idle tab."""
+    return max(1, int(os.environ.get("JEV_MCP_MAX_SESSIONS", DEFAULT_MCP_MAX_SESSIONS)))
 
 
 def profile_dir():

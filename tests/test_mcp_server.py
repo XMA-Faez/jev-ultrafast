@@ -6,6 +6,7 @@ import importlib.util
 import socket
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -85,9 +86,11 @@ class FakeAgent:
         self.pending, self.status = None, "ready"
         return self.snapshot()
 
-    def restart(self, goals, *, pause_before=None, extract=None):
+    def restart(self, goals, *, url=None, pause_before=None, extract=None):
         self.restarted.append(goals)
-        self.restart_options = {"pause_before": pause_before, "extract": extract}
+        self.restart_options = {"url": url, "pause_before": pause_before, "extract": extract}
+        if url:
+            self.browser.page = {**self.browser.page, "url": url}
         self.goals, self.status, self.pending = goals, "ready", None
         self.upcoming = list(FakeAgent.script)
 
@@ -102,7 +105,10 @@ def fake_agent(monkeypatch):
     monkeypatch.setattr(mcp_server, "Agent", FakeAgent)
     monkeypatch.setattr(mcp_server, "use_native_profile_endpoint", lambda: endpoint_calls.append(True))
     monkeypatch.setattr(mcp_server, "sessions", {})
+    monkeypatch.setattr(mcp_server, "closed_session_reasons", {})
     monkeypatch.delenv("JEV_HEADLESS", raising=False)
+    monkeypatch.delenv("JEV_MCP_IDLE_MINUTES", raising=False)
+    monkeypatch.delenv("JEV_MCP_MAX_SESSIONS", raising=False)
     return endpoint_calls
 
 
@@ -174,6 +180,98 @@ def test_existing_session_restarts_with_new_goal():
     assert FakeAgent.created[0].restarted == ["Read the total"]
     assert len(FakeAgent.created) == 1
     assert again["status"] == "done" and again["goal"] == "Read the total"
+
+
+def test_existing_session_loads_a_new_url_in_the_same_tab():
+    opened = mcp_server.browser_task("Open the cart", url="https://shop.test/")
+
+    again = mcp_server.browser_task("Read the docs", url="https://docs.test/", session_id=opened["session_id"])
+
+    assert len(FakeAgent.created) == 1
+    assert FakeAgent.created[0].restart_options["url"] == "https://docs.test/"
+    assert again["page"]["url"] == "https://docs.test/"
+
+
+def make_idle(session_id, seconds):
+    mcp_server.sessions[session_id].last_used -= seconds
+
+
+def test_idle_session_is_closed_and_later_calls_explain_why(monkeypatch):
+    monkeypatch.setenv("JEV_MCP_IDLE_MINUTES", "10")
+    idle = mcp_server.browser_task("Open the cart")["session_id"]
+    recent = mcp_server.browser_task("Open the cart")["session_id"]
+    make_idle(idle, 11 * 60)
+
+    mcp_server.close_idle_sessions()
+
+    assert list(mcp_server.sessions) == [recent]
+    assert FakeAgent.created[0].closed and not FakeAgent.created[1].closed
+    result = mcp_server.browser_task("Read the total", session_id=idle)
+    assert result["status"] == "error"
+    assert result["error"] == f"Session {idle} was closed (unused for 10 minutes). Start a new task without it."
+
+
+def test_background_loop_closes_idle_sessions(monkeypatch):
+    monkeypatch.setenv("JEV_MCP_IDLE_MINUTES", "1")
+    monkeypatch.setattr(mcp_server, "IDLE_CHECK_SECONDS", 0.01)
+    session_id = mcp_server.browser_task("Open the cart")["session_id"]
+    make_idle(session_id, 120)
+    stopped = threading.Event()
+    loop_thread = threading.Thread(target=mcp_server.close_idle_sessions_until, args=(stopped,))
+
+    loop_thread.start()
+    try:
+        deadline = time.monotonic() + 2
+        while mcp_server.sessions and time.monotonic() < deadline:
+            time.sleep(0.01)
+    finally:
+        stopped.set()
+        loop_thread.join(2)
+
+    assert not mcp_server.sessions and FakeAgent.created[0].closed
+
+
+def test_idle_session_in_use_is_not_closed(monkeypatch):
+    monkeypatch.setenv("JEV_MCP_IDLE_MINUTES", "1")
+    session_id = mcp_server.browser_task("Open the cart")["session_id"]
+    make_idle(session_id, 120)
+    session = mcp_server.sessions[session_id]
+
+    with session.lock:
+        mcp_server.close_idle_sessions()
+
+    assert session_id in mcp_server.sessions and not FakeAgent.created[0].closed
+
+
+def test_opening_beyond_the_limit_closes_the_least_recently_used_idle_session(monkeypatch):
+    monkeypatch.setenv("JEV_MCP_MAX_SESSIONS", "2")
+    first = mcp_server.browser_task("Open the cart")["session_id"]
+    second = mcp_server.browser_task("Open the cart")["session_id"]
+    mcp_server.browser_read(first)
+
+    third = mcp_server.browser_task("Open the cart")["session_id"]
+
+    assert set(mcp_server.sessions) == {first, third}
+    assert FakeAgent.created[1].closed
+    assert "keep at most 2 tabs open" in mcp_server.browser_task("Next", session_id=second)["error"]
+
+
+def test_session_limit_never_closes_a_busy_session(monkeypatch):
+    monkeypatch.setenv("JEV_MCP_MAX_SESSIONS", "1")
+    busy = mcp_server.browser_task("Open the cart")["session_id"]
+
+    with mcp_server.sessions[busy].lock:
+        opened = mcp_server.browser_task("Open the cart")["session_id"]
+
+    assert set(mcp_server.sessions) == {busy, opened}
+    assert not FakeAgent.created[0].closed
+
+
+def test_browser_close_is_remembered_as_the_reason():
+    session_id = mcp_server.browser_task("Open the cart")["session_id"]
+    mcp_server.browser_close(session_id)
+
+    assert "closed with browser_close" in mcp_server.browser_task("Next", session_id=session_id)["error"]
 
 
 def test_unknown_session_returns_error():
