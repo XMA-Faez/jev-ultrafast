@@ -28,7 +28,7 @@ Every observation produces a new element table:
 ...
 ```
 
-The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `PRESS_ENTER`, `PRESS_ESCAPE`, `ARROW_UP`/`ARROW_DOWN` (only in an open list), `SCROLL_UP`, `SCROLL_DOWN` (only when the page itself can scroll), `SCROLL_UP_IN_<n>`/`SCROLL_DOWN_IN_<n>` (the three largest visible overflowing panels, such as a map's side list), `WAIT`, `DONE`, and `BLOCKED`. Only supported operations and targets are offered. Besides buttons, links, inputs and ARIA roles, a click target can be a row that is clickable only through script: it starts a `cursor:pointer` region, carries an `onclick` attribute, or is focusable with `tabindex>=0` and a pointer cursor. Repeated labels such as several `More` buttons get the text of their own row, as in `More (Bar)`. Date, time, range, and color inputs take a formatted value through `TYPE_TEXT`.
+The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `PRESS_ENTER`, `PRESS_ESCAPE`, `ARROW_UP`/`ARROW_DOWN` (only in an open list), `SCROLL_UP`, `SCROLL_DOWN` (only when the page itself can scroll), `SCROLL_UP_IN_<n>`/`SCROLL_DOWN_IN_<n>` (the three largest visible overflowing panels, such as a map's side list), `GO_BACK` (only when the tab has a previous page), `ACCEPT_DIALOG`/`DISMISS_DIALOG` (only while a JavaScript `alert`, `confirm` or `prompt` is open; a prompt's answer is a `TYPE_TEXT` target), `WAIT`, `DONE`, and `BLOCKED`. `WAIT` returns as soon as the page changes, or after 3 s. Only supported operations and targets are offered. Besides buttons, links, inputs and ARIA roles, a click target can be a row that is clickable only through script: it starts a `cursor:pointer` region, carries an `onclick` attribute, or is focusable with `tabindex>=0` and a pointer cursor. Repeated labels such as several `More` buttons get the text of their own row, as in `More (Bar)`. Date, time, range, and color inputs take a formatted value through `TYPE_TEXT`. Text up to 200 characters is typed as key presses, so key and autocomplete listeners fire; longer or multi-line text is inserted at once. Password fields are offered as `TYPE_TEXT` targets whose value is never read: the model sees `••••••`, and history, traces and MCP results record the typed value as `••••••`.
 
 ```text
                       one TypeSafe request
@@ -105,7 +105,7 @@ Agent(
 )
 ```
 
-A run stops with status `done`, `blocked`, or `paused`, plus a `reason`. On `paused`, `snapshot()["pending"]` names the action; `agent.approve()` executes exactly that decision and `agent.reject()` skips it. When the model chooses `DONE`, one extra Jev yes/no question checks the visible page against the goal; a rejected `DONE` is fed back as history, and the third `DONE` is accepted with `verification.accepted` set to false. Environment equivalents: `JEV_HEADLESS=1`, `JEV_PROFILE_DIR` (keeps headless logins between runs), `JEV_TRACE_DIR`, `JEV_CHROME_PATH`.
+A run stops with status `done`, `blocked`, or `paused`, plus a `reason`. On `paused`, `snapshot()["pending"]` names the action; `agent.approve()` executes exactly that decision and `agent.reject()` skips it. When the model chooses `DONE`, one extra Jev yes/no question checks the visible page against the goal; a rejected `DONE` is fed back as history and the page gets the same bounded wait as `WAIT` before the next decision. The third `DONE` is accepted with `verification.accepted` set to false, unless the verifier's probability is below 0.1; then the run stops `blocked`. A run also stops `blocked` after the same action 10 times in a row, 5 waits in a row with no page change, or 3 fields the text helper found no value for. Environment equivalents: `JEV_HEADLESS=1`, `JEV_PROFILE_DIR` (keeps headless logins between runs), `JEV_TRACE_DIR`, `JEV_CHROME_PATH`.
 
 ### Headless and servers
 
@@ -137,6 +137,7 @@ On Linux, a native Brave or Chrome profile that Browser Harness does not scan is
 - **One browser call per snapshot.** Read visible controls, their names, values, and text atomically. Keep references to the actual DOM nodes.
 - **Validate the selected target.** Clicks check the document, form values, target, and nearby context. Animation alone does not force another prediction. Resolve current geometry and reject covered controls before input.
 - **Wait for useful state.** After typing into a combobox, wait for visible suggestions, capped at 200 ms. Other interactions get at most two animation frames or 50 ms, then the document gets up to 1 s to finish loading after a navigation. These reads happen after execution is logged.
+- **Survive slow providers.** Model calls are reads, so timeouts, HTTP 429/5xx and provider errors inside an HTTP 200 body are retried up to three times. Each attempt ends after 20 s even when the provider keeps the connection alive with filler bytes.
 - **Keep hidden tabs rendering.** Focus emulation prevents background animation throttling without switching Chrome's visible tab.
 - **Send visible text.** Offscreen article bodies and footers do not fill the model context.
 - **Reuse an interrupted text request.** A generated value survives a stale-page retry only if the entire text-helper input is unchanged.
@@ -167,7 +168,7 @@ In six alternating runs with identical models and settings, both versions passed
 
 The same policy opened the requested Wikipedia article in **2.798 s** and passed a local hotel search/filter task in **1.896 s**. Runs, failures, source hashes, and measurement boundaries are in [performance.md](docs/performance.md).
 
-A `DONE` choice still requires independent outcome verification; the built-in verifier is a second opinion, not proof. The DOM reader handles common HTML and ARIA controls, open shadow roots, same-origin iframes, and tabs or pop-ups opened by the page. It does not implement the full accessible-name specification. Cross-origin iframes are counted and skipped ([design note](docs/frames.md)). Canvas, uploads, custom scrollers that do not use CSS overflow, closed shadow roots, and arbitrary keyboard widgets remain unsupported. Attached mode shares the existing Chrome profile.
+A `DONE` choice still requires independent outcome verification; the built-in verifier is a second opinion, not proof. The DOM reader handles common HTML and ARIA controls, open shadow roots, same-origin iframes, and tabs or pop-ups opened by the page. It does not implement the full accessible-name specification. Cross-origin iframes are counted and skipped ([design note](docs/frames.md)). Canvas, uploads, custom scrollers that do not use CSS overflow, closed shadow roots, hover-only menus, `beforeunload` dialogs, and arbitrary keyboard widgets remain unsupported. Bot checks and CAPTCHAs, common in headless mode, end a run as `blocked`. Attached mode shares the existing Chrome profile.
 
 A broader task suite lives in [bench/](bench): public sites and local pages for keyboard submit, shadow DOM, iframes, pop-ups, native inputs, and checkpoints. Results appear in [benchmark.md](docs/benchmark.md) only after a recorded run.
 
@@ -182,7 +183,7 @@ node --check jev_ultrafast/snapshot.js
 uv build
 ```
 
-Tests make no model calls. `tests/browser` drives a private headless Chromium and skips when none is installed (`JEV_CHROME_PATH` selects one, `JEV_SKIP_BROWSER_TESTS=1` skips them). `uv run python scripts/check_guards.py` runs the same browser tests against your running Chrome. CI runs lint, offline tests, browser tests, and the build on every push; the paid benchmark runs only on manual dispatch. Live examples and recording scripts make paid API calls. `scripts/record_flights.py <new-folder>` captures original browser timestamps; `scripts/render_demo.py <recording-folder>` renders that verified run at 1× and crops out the Google account strip. Credentials and raw traces stay ignored.
+Tests make no model calls. `tests/browser` drives a private headless Chromium and skips when none is installed (`JEV_CHROME_PATH` selects one, `JEV_SKIP_BROWSER_TESTS=1` skips them). `uv run python scripts/check_guards.py` runs the same browser tests against your running Chrome. `uv run python scripts/inspect_page.py URL` prints the element table, controls and visible text Jev would see, without model calls. CI runs lint, offline tests, browser tests, and the build on every push; the paid benchmark runs only on manual dispatch. Live examples and recording scripts make paid API calls. `scripts/record_flights.py <new-folder>` captures original browser timestamps; `scripts/render_demo.py <recording-folder>` renders that verified run at 1× and crops out the Google account strip. Credentials and raw traces stay ignored.
 
 ---
 

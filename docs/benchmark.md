@@ -33,5 +33,10 @@ Each task in `bench/tasks/` is one natural-language goal plus a verifier that re
 | iframe_booking | local, same-origin iframe | Native date and range values submitted: 2026-10-14 and 4 guests |
 | popup_docs | local, `target=_blank` | Pricing opened in the new tab and the extracted monthly price is $24 |
 | checkpoint | local, library only | Runs with `pause_before=["delete"]` and rejects; passes if a pause happened and nothing was deleted |
+| login_confirm | local, password + `confirm()` | Signed in as ada, the draft deleted through the confirm dialog, no dialog left open |
+| slow_catalogue | local, results after 2.5 s | Query `lamp`, page 2 opened from pagination below the fold, and its results loaded |
+| web_form | httpbin.org | The echoed POST has the name, large size, bacon and cheese, 19:30 and the instruction |
+| shop_checkout | saucedemo.com | Runs with `pause_before=["finish"]` and stops at the pause: overview page with the backpack, no order placed |
+| map_search | openstreetmap.org | A way/node/relation details page for the Paris Eiffel Tower |
 
 The flights task departs 30 days after the run so the date is always searchable. `examples/flights.py` keeps the recorded September 20, 2026 trip that the README's demo measured.
