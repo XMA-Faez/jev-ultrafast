@@ -234,10 +234,18 @@ def test_changed_field_context_does_not_reuse_generated_text(runner, monkeypatch
 
 
 def test_loading_waits_do_not_trigger_no_progress_stop(runner):
-    for _ in range(5):
+    for _ in range(loop.UNCHANGED_WAIT_LIMIT - 1):
         runner.state["decision"] = decision("wait")
         runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
-    assert len(runner.state["history"]) == 5 and runner.state["status"] == "ready"
+    assert len(runner.state["history"]) == loop.UNCHANGED_WAIT_LIMIT - 1 and runner.state["status"] == "ready"
+
+
+def test_waiting_on_a_page_that_never_changes_stops(runner):
+    for _ in range(loop.UNCHANGED_WAIT_LIMIT):
+        runner.state["decision"] = decision("wait")
+        act_now(runner)
+    assert runner.state["status"] == "blocked"
+    assert runner.state["reason"] == f"page did not change during {loop.UNCHANGED_WAIT_LIMIT} waits in a row"
 
 
 def test_stale_observation_preserves_executed_action(runner):
@@ -330,7 +338,7 @@ def test_flight_verification_rejects_wrong_trip(changed):
 def test_text_helper_rejects_invalid_values(monkeypatch, content):
     monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
     monkeypatch.setattr(model, "post_json", Mock(return_value={"choices": [{"message": {"content": content}}]}))
-    with pytest.raises(ValueError, match="nothing typed"):
+    with pytest.raises(model.NoFieldText, match="nothing typed"):
         model.field_text({"goal": "Find a flight"})
 
 
@@ -417,3 +425,175 @@ def test_tab_adopted_during_observation_is_noted(runner):
     runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
     assert runner.state["history"][-1]["action"] == "switched to new tab https://example.test/popup"
     assert "new_tab" not in runner.state["page"]
+
+
+def test_text_helper_without_a_value_is_noted_and_the_model_chooses_again(runner, monkeypatch):
+    no_value = model.NoFieldText("Text helper found no value for this field in the goal; nothing typed.")
+    helper = Mock(side_effect=no_value)
+    monkeypatch.setattr(loop, "field_text", helper)
+    act_now(runner)
+    runner.state["browser"].act.assert_not_called()
+    assert runner.state["status"] == "ready"
+    assert runner.state["history"][-1]["kind"] == "note"
+    assert runner.state["history"][-1]["action"].startswith("no text for Search: Text helper found no value")
+    for _ in range(2):
+        runner.state.update(decision=decision(), status="predicted")
+        act_now(runner)
+    runner.state["browser"].act.assert_not_called()
+    assert runner.state["status"] == "blocked"
+    assert runner.state["reason"] == "text helper found no value"
+
+
+def test_text_helper_transport_failure_still_stops_the_run(runner, monkeypatch):
+    monkeypatch.setattr(loop, "field_text", Mock(side_effect=RuntimeError("Model provider returned HTTP 503")))
+    with pytest.raises(RuntimeError, match="HTTP 503"):
+        act_now(runner)
+    assert runner.state["history"] == []
+
+
+def test_missing_text_credential_is_not_mistaken_for_a_missing_value(runner, monkeypatch):
+    monkeypatch.setattr(loop, "field_text", Mock(side_effect=ValueError("TYPE_TEXT needs TEXT_MODEL_API_KEY")))
+    with pytest.raises(ValueError, match="TEXT_MODEL_API_KEY"):
+        act_now(runner)
+
+
+def test_text_failures_reset_for_the_next_goal(monkeypatch):
+    agent = make_runner(goals=("First", "Second"), done_threshold=None)
+    agent.state["text_failures"] = 2
+    agent.state["decision"] = decision("DONE", "DONE", None)
+    act_now(agent)
+    assert agent.state["goal"] == "Second" and agent.state["text_failures"] == 0
+
+
+def secret_page():
+    state = page()
+    state["actions"][0] = {**state["actions"][0], "label": "Password", "secret": True, "value": ""}
+    state["fingerprint"] = fingerprint(state)
+    return state
+
+
+def test_secret_field_text_reaches_only_the_browser(tmp_path, monkeypatch):
+    from jev_ultrafast.trace import Trace
+
+    secret = "hunter2-correct-horse"
+    monkeypatch.setattr(loop, "field_text", Mock(return_value=(secret, {"model": "test", "latency_ms": 5})))
+    agent = make_runner(current=secret_page(), trace=Trace(tmp_path))
+    act_now(agent)
+    assert agent.state["browser"].act.call_args.kwargs["text"] == secret
+    assert agent.state["history"][-1]["text"] == loop.SECRET_MASK
+    assert agent.state["text_calls"][-1]["value"] == loop.SECRET_MASK
+    agent.close()
+    written = "".join(path.read_text() for path in agent.trace.path.iterdir() if path.suffix in {".jsonl", ".json"})
+    assert secret not in written
+    events = {event["event"]: event for event in agent.trace.events()}
+    assert events["text"]["value"] == events["execute"]["text"] == loop.SECRET_MASK
+
+
+def test_masked_secret_repeats_are_still_detected(monkeypatch):
+    monkeypatch.setattr(loop, "field_text", Mock(return_value=("s3cret", {"model": "test", "latency_ms": 5})))
+    agent = make_runner(current=secret_page())
+    for _ in range(3):
+        agent.state.update(decision=decision(), status="predicted")
+        act_now(agent)
+    assert agent.state["browser"].act.call_count == 2
+    assert agent.state["status"] == "blocked" and agent.state["reason"] == "repeated action"
+
+
+def test_dialog_opened_by_an_action_is_noted(runner):
+    runner.state["decision"] = decision("e3")
+    runner.state["browser"].act.return_value = {"executed": "e3", "dialog": {"type": "confirm",
+                                                                             "message": "Delete this item?"}}
+    act_now(runner)
+    assert runner.state["history"][-2]["action"] == "Go"
+    assert runner.state["history"][-1]["action"] == "a confirm dialog opened: Delete this item?"
+
+
+def dialog_page_with_back():
+    state = page()
+    state["actions"] = [
+        {"id": "accept_dialog", "kind": "dialog", "accept": True, "label": "Accept the confirm dialog (OK): Delete?"},
+        {"id": "dismiss_dialog", "kind": "dialog", "accept": False, "label": "Dismiss the confirm dialog (Cancel)"},
+        {"id": "go_back", "kind": "back", "label": "Go back to the previous page (Search)", "entry": 3,
+         "from_entry": 4},
+    ]
+    state["fingerprint"] = fingerprint(state)
+    return state
+
+
+@pytest.mark.parametrize(("choice_id", "pattern"), [("accept_dialog", "delete"), ("go_back", "go back")])
+def test_dialog_and_back_controls_can_be_paused(choice_id, pattern):
+    agent = make_runner(current=dialog_page_with_back(), pause_before=[pattern])
+    agent.state["decision"] = {**decision(choice_id, choice_id.upper(), None), "probabilities": {choice_id: 1.0}}
+    act_now(agent)
+    assert agent.state["status"] == "paused" and agent.state["pending"]["choice"] == choice_id
+    agent.state["browser"].act.assert_not_called()
+
+
+def test_dialog_and_back_controls_are_model_operations():
+    _, _, controls = model.action_space(dialog_page_with_back()["actions"])
+    assert {"ACCEPT_DIALOG", "DISMISS_DIALOG", "GO_BACK"} <= set(controls)
+
+
+def fake_browser(monkeypatch, dialog, probe_blocks=False):
+    import jev_ultrafast.browser as browser
+
+    b = browser.Browser.__new__(browser.Browser)
+    b.target, b.session, b.after_input = "TARGET", "SESSION", None
+
+    def cdp(method, **params):
+        if method == "Runtime.evaluate":
+            if probe_blocks:
+                raise TimeoutError("blocked")
+            return {"result": {"value": 1}}
+        if method == "Target.getTargetInfo":
+            return {"targetInfo": {"url": "https://example.test/", "title": "Shop"}}
+        raise AssertionError(f"unexpected {method}")
+
+    monkeypatch.setattr(browser, "harness_meta", Mock(return_value={"dialog": dialog}))
+    monkeypatch.setattr(browser, "cdp", cdp)
+    return b
+
+
+CONFIRM = {"type": "confirm", "message": "Delete?", "url": "https://example.test/", "frameId": "TARGET",
+           "defaultPrompt": ""}
+
+
+def test_our_open_dialog_is_observed_without_reading_the_blocked_page(monkeypatch):
+    b = fake_browser(monkeypatch, CONFIRM)
+    observed = b.observe(screenshot=False)
+    assert observed["dialog"]["message"] == "Delete?" and observed["title"] == "Shop"
+    assert [a["id"] for a in observed["actions"]] == ["accept_dialog", "dismiss_dialog"]
+    assert b.fresh(observed)
+    assert observed["fingerprint"] == fingerprint(observed)
+
+
+@pytest.mark.parametrize(("frame", "probe_blocks", "ours"), [
+    ("OTHER_TAB", False, False), ("CHILD_FRAME", True, True),
+])
+def test_dialog_ownership(monkeypatch, frame, probe_blocks, ours):
+    b = fake_browser(monkeypatch, {**CONFIRM, "frameId": frame}, probe_blocks)
+    assert (b.open_dialog() is not None) is ours
+
+
+def test_normal_page_is_not_fresh_while_our_dialog_is_open(monkeypatch):
+    b = fake_browser(monkeypatch, CONFIRM)
+    assert not b.fresh(page())
+
+
+def test_a_long_run_of_one_action_that_keeps_changing_the_page_is_stopped(runner):
+    pages = (dict(page(), text=f"Display {count}", fingerprint=f"display-{count}") for count in range(100))
+    runner.state["browser"].observe.side_effect = lambda **_: next(pages)
+    for _ in range(loop.SAME_ACTION_RUN_LIMIT):
+        runner.state["decision"] = decision("e3")
+        act_now(runner)
+    assert runner.state["status"] == "blocked"
+    assert runner.state["reason"] == f"repeated 'Go' {loop.SAME_ACTION_RUN_LIMIT} times in a row"
+
+
+def test_a_run_shorter_than_the_limit_continues(runner):
+    pages = (dict(page(), text=f"Display {count}", fingerprint=f"display-{count}") for count in range(100))
+    runner.state["browser"].observe.side_effect = lambda **_: next(pages)
+    for _ in range(loop.SAME_ACTION_RUN_LIMIT - 1):
+        runner.state["decision"] = decision("e3")
+        act_now(runner)
+    assert runner.state["status"] == "ready"

@@ -68,7 +68,7 @@ def test_goals_run_sequentially_and_advance_the_plan(monkeypatch):
 
 def test_verifier_rejections_reset_per_goal(monkeypatch):
     runner = make_runner(goals=["First", "Second"], done_threshold=0.5)
-    probabilities = iter([0.1, 0.1, 0.1, 0.1])
+    probabilities = iter([0.1, 0.1, 0.3, 0.1])
     monkeypatch.setattr(loop, "verify_done", lambda *_: {"probability": next(probabilities), "latency_ms": 1,
                                                          "usage": {}})
     for _ in range(3):

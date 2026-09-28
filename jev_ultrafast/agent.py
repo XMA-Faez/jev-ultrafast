@@ -9,15 +9,20 @@ from typing import Any
 
 from . import launch, settings
 from .browser import Browser, StalePage
-from .model import action_space, choose, extract_fields, field_context, field_text, verify_done
+from .model import NoFieldText, action_space, choose, extract_fields, field_context, field_text, verify_done
 from .questions import MAX_STEPS
 from .trace import Trace
 
 STOPPED = {"done", "blocked"}
 UNPAUSABLE_KINDS = {"wait", "scroll"}
 NO_PROGRESS_LIMIT = 3
+TEXT_FAILURE_LIMIT = 3
+SECRET_MASK = "••••••"
 REPEAT_LIMIT = 2
+SAME_ACTION_RUN_LIMIT = 10
+UNCHANGED_WAIT_LIMIT = 5
 VERIFIER_REJECTION_LIMIT = 2
+VERIFIER_VETO_PROBABILITY = 0.1
 
 
 @dataclass
@@ -44,6 +49,7 @@ class RunState:
     record: bool = False
     trace_path: str | None = None
     done_rejections: int = 0
+    text_failures: int = 0
     extras: dict = field(default_factory=dict)
 
     @classmethod
@@ -92,6 +98,23 @@ def label_matches(pattern, label):
 
 def is_executed(entry):
     return entry.get("kind") != "note"
+
+
+def unchanged_waits(entries, run_length):
+    return len(entries) == run_length and all(e["kind"] == "wait" and e["page_changed"] is False for e in entries)
+
+
+def repeats_same_action(entries, run_length):
+    """The last `run_length` executed entries are one identical non-scroll, non-wait action."""
+    if len(entries) < run_length or entries[0]["kind"] in {"wait", "scroll"}:
+        return False
+    first = entries[0]
+    return all((e["action"], e["kind"], e["text"]) == (first["action"], first["kind"], first["text"]) for e in entries)
+
+
+def recorded_text(action, text):
+    """Secret fields never leave the browser call: history, traces and results keep only a fixed mask."""
+    return SECRET_MASK if text is not None and action.get("secret") else text
 
 
 class Agent:
@@ -144,7 +167,11 @@ class Agent:
             raise
         if self.record_dir:
             self.record_dir.mkdir(parents=True, exist_ok=True)
-            (self.record_dir / "000000.jpg").write_bytes(base64.b64decode(self.state.page["screenshot"]))
+            self.save_recording_frame("000000")
+
+    def save_recording_frame(self, name):
+        if screenshot := self.state["page"].get("screenshot"):
+            (self.record_dir / f"{name}.jpg").write_bytes(base64.b64decode(screenshot))
 
     def emit(self, event, **details):
         if self.trace:
@@ -346,6 +373,7 @@ class Agent:
             started_at=None,
             elapsed_ms=0,
             done_rejections=0,
+            text_failures=0,
         )
         self.pending_text = None
         self.emit("note", text="restart", plan=plan, url=url)
@@ -376,14 +404,19 @@ class Agent:
             if self.pending_text and self.pending_text[0] == context:
                 _, text, helper = self.pending_text
             else:
-                text, helper = field_text(context)
+                try:
+                    text, helper = field_text(context)
+                except NoFieldText as exc:
+                    return self.skip_field_without_text(action, exc)
                 self.pending_text = (context, text, helper)
-                state["text_calls"].append({**helper, "field": action["label"], "value": text})
-                self.emit("text", field=action["label"], value=text, model=helper["model"],
+                shown = recorded_text(action, text)
+                state["text_calls"].append({**helper, "field": action["label"], "value": shown})
+                self.emit("text", field=action["label"], value=shown, model=helper["model"],
                           latency_ms=helper["latency_ms"])
+        shown_text = recorded_text(action, text)
         repeats = [
             h for h in executed
-            if h.get("fingerprint") == page["fingerprint"] and h["choice"] == selected and h["text"] == text
+            if h.get("fingerprint") == page["fingerprint"] and h["choice"] == selected and h["text"] == shown_text
         ]
         if action["kind"] != "wait" and len(repeats) >= REPEAT_LIMIT:
             self.pending_text = None
@@ -402,7 +435,7 @@ class Agent:
             "probability": decision["probabilities"][selected],
             "confidence": decision["confidence"],
             "latency_ms": decision["latency_ms"],
-            "text": text,
+            "text": shown_text,
             "text_helper": helper["model"] if helper else None,
             "text_latency_ms": helper["latency_ms"] if helper else 0,
             "operation": decision["operation"],
@@ -415,11 +448,13 @@ class Agent:
             "elapsed_ms": state["elapsed_ms"],
         }
         state["history"].append(entry)
-        self.emit("execute", label=action["label"], kind=action["kind"], choice=selected, text=text,
+        self.emit("execute", label=action["label"], kind=action["kind"], choice=selected, text=shown_text,
                   executed_ms=entry["executed_ms"])
-        new_tab = outcome.get("new_tab") if isinstance(outcome, dict) else None
-        if new_tab:
+        outcome = outcome if isinstance(outcome, dict) else {}
+        if new_tab := outcome.get("new_tab"):
             self.note(f"switched to new tab {new_tab.get('url', '')}")
+        if dialog := outcome.get("dialog"):
+            self.note(f"a {dialog.get('type', 'alert')} dialog opened: {dialog.get('message', '')}")
         state["page"] = self.observe_page()
         if late_tab := state["page"].pop("new_tab", None):
             self.note(f"switched to new tab {late_tab.get('url', '')}")
@@ -430,14 +465,30 @@ class Agent:
             elapsed_ms=state["elapsed_ms"],
         )
         if state["record"]:
-            (self.record_dir / f"{state['elapsed_ms']:06d}.jpg").write_bytes(
-                base64.b64decode(state["page"]["screenshot"])
-            )
-        recent = [h for h in state["history"] if is_executed(h)][-NO_PROGRESS_LIMIT:]
+            self.save_recording_frame(f"{state['elapsed_ms']:06d}")
+        executed = [h for h in state["history"] if is_executed(h)]
+        recent = executed[-NO_PROGRESS_LIMIT:]
         if len(recent) == NO_PROGRESS_LIMIT and all(h["page_changed"] is False and h["kind"] != "wait" for h in recent):
             self.finish("blocked", f"no page change after {NO_PROGRESS_LIMIT} actions")
+        elif unchanged_waits(executed[-UNCHANGED_WAIT_LIMIT:], UNCHANGED_WAIT_LIMIT):
+            self.finish("blocked", f"page did not change during {UNCHANGED_WAIT_LIMIT} waits in a row")
+        elif repeats_same_action(executed[-SAME_ACTION_RUN_LIMIT:], SAME_ACTION_RUN_LIMIT):
+            self.finish("blocked", f"repeated {entry['action']!r} {SAME_ACTION_RUN_LIMIT} times in a row")
         else:
             state["status"] = "ready"
+        return self.snapshot()
+
+    def skip_field_without_text(self, action, error):
+        """No value to type is an observation, not a crash: note it and let the model choose again."""
+        state = self.state
+        self.pending_text = None
+        state["text_failures"] += 1
+        self.note(f"no text for {action['label']}: {error}")
+        if state["text_failures"] >= TEXT_FAILURE_LIMIT:
+            self.finish("blocked", "text helper found no value")
+        else:
+            state["status"] = "ready"
+            state["elapsed_ms"] = self.elapsed()
         return self.snapshot()
 
     def complete_goal(self, page):
@@ -457,8 +508,12 @@ class Agent:
                 if state["done_rejections"] < VERIFIER_REJECTION_LIMIT:
                     state["done_rejections"] += 1
                     self.note(f"DONE rejected by verifier (p={check['probability']:.2f})")
+                    self.let_page_settle_after_rejected_done(page)
                     state["status"] = "ready"
                     state["elapsed_ms"] = self.elapsed()
+                    return
+                if check["probability"] < VERIFIER_VETO_PROBABILITY:
+                    self.finish("blocked", f"verifier rejected DONE three times (last p={check['probability']:.2f})")
                     return
                 reason = "verifier rejected DONE twice; accepted model DONE"
         state["plan_index"] += 1
@@ -466,12 +521,18 @@ class Agent:
             self.note(f"goal {state['plan_index']} complete")
             state["goal"] = state["plan"][state["plan_index"]]
             state["done_rejections"] = 0
+            state["text_failures"] = 0
             state["status"] = "ready"
             state["elapsed_ms"] = self.elapsed()
             return
         if self.extract:
             self.extract_on_done(page)
         self.finish("done", reason)
+
+    def let_page_settle_after_rejected_done(self, page):
+        """Deciding again on an unchanged page repeats DONE; give loading content the same bounded wait as WAIT."""
+        with contextlib.suppress(Exception):
+            self.state["browser"].wait_for_change(page)
 
     def extract_on_done(self, page):
         state = self.state

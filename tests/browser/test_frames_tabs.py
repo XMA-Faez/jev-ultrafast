@@ -172,3 +172,51 @@ def test_cross_origin_iframe_is_skipped_and_counted(open_browser, served):
     assert "frames" not in page
     assert not any(a.get("frame") for a in page["actions"])
     assert browser.fresh(page)
+
+
+def test_go_back_is_offered_only_with_history_and_returns(open_browser, served):
+    browser = open_browser(url=served + "back_start.html")
+    page = browser.observe(screenshot=False)
+    assert not any(a["kind"] == "back" for a in page["actions"])
+    browser.act(action(page, label="Next page"), page)
+    page = browser.observe(screenshot=False)
+    back = action(page, id="go_back")
+    assert back["label"] == "Go back to the previous page (Back start)"
+    assert [a["id"] for a in page["actions"]][-2:] == ["go_back", "wait"]
+    assert browser.act(back, page) == {"executed": "go_back"}
+    page = browser.observe(screenshot=False)
+    assert page["title"] == "Back start" and "Start page" in page["text"]
+
+
+def test_go_back_undoes_a_same_document_entry(open_browser, served):
+    browser = open_browser(url=served + "back_start.html")
+    page = browser.observe(screenshot=False)
+    browser.act(action(page, label="Show details"), page)
+    page = browser.observe(screenshot=False)
+    assert page["url"].endswith("#details")
+    browser.act(action(page, id="go_back"), page)
+    assert browser.observe(screenshot=False)["url"] == served + "back_start.html"
+
+
+def test_go_back_is_stale_when_history_changed_since_observation(open_browser, served):
+    browser = open_browser(url=served + "back_start.html")
+    page = browser.observe(screenshot=False)
+    browser.act(action(page, label="Next page"), page)
+    page = browser.observe(screenshot=False)
+    back = action(page, id="go_back")
+    browser.call("Page.navigate", url=served + "back_start.html?again")
+    browser.wait_until("document.readyState==='complete'", 3)
+    with pytest.raises(StalePage):
+        browser.act(back, page)
+    assert browser.evaluate("location.search") == "?again"
+
+
+def test_go_back_history_guard_refuses_a_changed_entry_even_with_an_unchanged_page(open_browser, served):
+    browser = open_browser(url=served + "back_start.html")
+    page = browser.observe(screenshot=False)
+    browser.act(action(page, label="Next page"), page)
+    page = browser.observe(screenshot=False)
+    moved = {**action(page, id="go_back"), "entry": -1}
+    with pytest.raises(StalePage, match="history changed"):
+        browser.act(moved, page)
+    assert browser.observe(screenshot=False)["title"] == "Back next"

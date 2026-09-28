@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Key listener</title>
+<label>Letter <input id="letter"></label>
+<label>Notes <textarea id="notes"></textarea></label>
+<p id="keys">Keys:</p>
+<p id="codes">Codes:</p>
+<script>
+  const shown = document.getElementById('keys');
+  for (const id of ['letter', 'notes'])
+    document.getElementById(id).addEventListener('keyup', event => { shown.textContent += ' ' + event.key; });
+  document.getElementById('letter').addEventListener('keydown', event => {
+    document.getElementById('codes').textContent += ' ' + event.which;
+  });
+</script>

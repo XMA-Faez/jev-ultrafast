@@ -51,9 +51,10 @@ server = MCPServer(
         "to load it there instead of opening a new tab. A session handles one call at a time. "
         "Call browser_close when you no longer need a tab. Tabs unused for a while close on their own, "
         "and opening a tab beyond the limit closes the least recently used idle one. "
-        "Supported: clicks, typing, native selects, date and range inputs, Enter/Escape/arrow keys, scrolling, "
-        "same-origin iframes, open shadow DOM, pop-up tabs. Not supported: cross-origin iframes, "
-        "file uploads, canvas."
+        "Supported: clicks, typing, password fields (never echoed back), native selects, date and range inputs, "
+        "Enter/Escape/arrow keys, scrolling, going back, JavaScript alert/confirm/prompt dialogs, same-origin "
+        "iframes, open shadow DOM, pop-up tabs. Not supported: cross-origin iframes, file uploads, canvas, "
+        "hover-only menus, CAPTCHAs."
     ),
 )
 
@@ -334,6 +335,8 @@ def browser_screenshot(session_id: str) -> Image:
     """Screenshot an open tab, to verify an outcome visually."""
     with stdout_kept_for_protocol(), claimed_session(session_id) as agent:
         page = agent.browser.observe(screenshot=True)
+        if not page.get("screenshot"):
+            raise ValueError(f"No screenshot while this page shows: {page.get('text', '')[:200]}. Use browser_read.")
         return Image(data=base64.b64decode(page["screenshot"]), format="jpeg")
 
 

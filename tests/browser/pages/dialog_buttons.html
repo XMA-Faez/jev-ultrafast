@@ -1,0 +1,8 @@
+<!doctype html>
+<title>Dialogs</title>
+<style>button{display:block;margin:12px;width:220px;height:40px}</style>
+<button onclick="alert('Saved your changes'); document.getElementById('result').textContent='Alert closed'">Show alert</button>
+<button onclick="document.getElementById('result').textContent=confirm('Delete this item?') ? 'Confirmed' : 'Cancelled'">Show confirm</button>
+<button onclick="const answer=prompt('Your name?','Guest'); document.getElementById('result').textContent=answer===null ? 'No answer' : 'Hello '+answer">Show prompt</button>
+<button onclick="setTimeout(()=>alert('Later alert'),300)">Alert later</button>
+<p id="result">Nothing yet</p>

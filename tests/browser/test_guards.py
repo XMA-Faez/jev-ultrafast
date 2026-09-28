@@ -137,3 +137,24 @@ def test_navigation_invalidates_the_old_document(form_browser):
     field = next(a for a in page["actions"] if a["kind"] == "fill")
     form_browser.call("Page.navigate", url="about:blank")
     assert not form_browser.fresh(page, field)
+
+
+COVERED_SELECT_PAGE = """<!doctype html><title>Sort</title>
+<style>.dropdown{position:relative;display:inline-block}
+select{width:200px;height:30px}
+.dropdown span{position:absolute;inset:0;background:#eee;pointer-events:auto}</style>
+<label>Sort by <span class="dropdown"><select id="sort" aria-label="Sort by">
+<option value="featured">Featured</option><option value="price">Price: Low to High</option>
+</select><span>Featured</span></span></label>"""
+
+
+def test_native_dropdown_covered_by_a_styled_overlay_is_still_selected(open_browser):
+    browser = open_browser(html=COVERED_SELECT_PAGE)
+    browser.evaluate("document.getElementById('sort').addEventListener('change', e => window.sorted=e.target.value)")
+    page = browser.observe(screenshot=False)
+    sort = next(a for a in page["actions"] if a["kind"] == "select" and a["value"] == "price")
+    covered = browser.evaluate("document.elementFromPoint(%f,%f).tagName" % (
+        sort["rect"]["x"] + sort["rect"]["w"] / 2, sort["rect"]["y"] + sort["rect"]["h"] / 2))
+    assert covered == "SPAN"
+    browser.act(sort, page)
+    assert browser.evaluate("window.sorted") == "price"

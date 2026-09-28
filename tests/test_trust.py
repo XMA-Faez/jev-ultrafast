@@ -46,12 +46,24 @@ def test_verify_done_posts_one_noul_question(monkeypatch):
     assert calls[0]["state"]["elements"] and calls[0]["state"]["page"]["url"] == "https://example.test/"
 
 
-@pytest.mark.parametrize("answer", [{"noul": 1.5}, {"noul": -0.1}, {"noul": math.nan}, {"noul": "0.5"}, {}, None])
-def test_verify_done_rejects_invalid_noul(monkeypatch, answer):
+@pytest.mark.parametrize(
+    "answer, reason",
+    [
+        ({"noul": 1.5}, "noul is not a number"),
+        ({"noul": -0.1}, "noul is not a number"),
+        ({"noul": math.nan}, "noul is not a number"),
+        ({"noul": "0.5"}, "noul is not a number"),
+        ({}, "missing answer"),
+        (None, "missing answer"),
+    ],
+)
+def test_verify_done_rejects_invalid_noul_after_one_retry(monkeypatch, answer, reason):
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
-    monkeypatch.setattr(model, "post_json", Mock(return_value={"answers": {"done": answer}}))
-    with pytest.raises(ValueError, match="Invalid TypeSafe response; no action executed."):
+    post = Mock(return_value={"answers": {"done": answer}})
+    monkeypatch.setattr(model, "post_json", post)
+    with pytest.raises(ValueError, match=rf"Invalid TypeSafe response \(done: {reason}.*no action executed"):
         model.verify_done(page(), "Find a book", [])
+    assert post.call_count == 2
 
 
 def test_verifier_accepts_done_at_threshold(monkeypatch):
@@ -75,7 +87,7 @@ def test_verifier_rejection_returns_to_ready_with_a_note(monkeypatch):
 
 def test_third_rejected_done_is_accepted_and_marked(monkeypatch):
     runner = done_runner()
-    monkeypatch.setattr(loop, "verify_done", verifier(0.2, 0.1, 0.05))
+    monkeypatch.setattr(loop, "verify_done", verifier(0.2, 0.1, 0.35))
     for _ in range(2):
         runner.state["decision"] = dict(DONE)
         assert act_now(runner)["status"] == "ready"
@@ -83,8 +95,20 @@ def test_third_rejected_done_is_accepted_and_marked(monkeypatch):
     snapshot = act_now(runner)
     assert snapshot["status"] == "done"
     assert snapshot["reason"] == "verifier rejected DONE twice; accepted model DONE"
-    assert snapshot["verification"] == {"probability": 0.05, "accepted": False, "latency_ms": 7}
+    assert snapshot["verification"] == {"probability": 0.35, "accepted": False, "latency_ms": 7}
     assert loop.verify_done.call_count == 3
+
+
+def test_third_done_the_verifier_vetoes_blocks_the_run(monkeypatch):
+    runner = done_runner()
+    monkeypatch.setattr(loop, "verify_done", verifier(0.2, 0.1, 0.08))
+    for _ in range(2):
+        runner.state["decision"] = dict(DONE)
+        act_now(runner)
+    runner.state["decision"] = dict(DONE)
+    snapshot = act_now(runner)
+    assert snapshot["status"] == "blocked"
+    assert snapshot["reason"] == "verifier rejected DONE three times (last p=0.08)"
 
 
 def test_disabled_verifier_makes_no_call(monkeypatch):
@@ -210,8 +234,40 @@ def test_extract_fields_accepts_exact_scalar_object(monkeypatch):
 def test_extract_fields_rejects_invalid_data(monkeypatch, content):
     monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
     monkeypatch.setattr(model, "post_json", helper_reply(content))
-    with pytest.raises(ValueError, match="Extraction returned invalid data."):
+    with pytest.raises(ValueError, match="Extraction returned invalid data: "):
         model.extract_fields("Find Dune", SCHEMA, page())
+
+
+@pytest.mark.parametrize(
+    "content, reason",
+    [
+        ("not json", "not JSON"),
+        ('{"title": "Dune", "price": 9.5', "not JSON"),
+        ('{"title": "Dune"}', "missing keys in_stock, price"),
+        ('{"title": "Dune", "price": 9.5, "in_stock": true, "extra": 1}', "extra keys extra"),
+        ('{"title": ["a"], "price": 9.5, "in_stock": true}', "non-scalar values for title"),
+        (json.dumps({"title": "x" * 5000, "price": 1, "in_stock": True}), "too large"),
+    ],
+)
+def test_extraction_error_says_why(monkeypatch, content, reason):
+    monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", helper_reply(content))
+    with pytest.raises(ValueError, match=re.escape(f"Extraction returned invalid data: {reason}")):
+        model.extract_fields("Find Dune", SCHEMA, page())
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"title": "Dune", "price": 9.5, "in_stock": true}\n',
+        '```json\n{"title": "Dune", "price": 9.5, "in_stock": true}\n```',
+        '{"title": "Dune", "price": 9.5, "in_stock": true}\n```',
+    ],
+)
+def test_extraction_tolerates_fences_and_trailing_text(monkeypatch, content):
+    monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", helper_reply(content))
+    assert model.extract_fields("Find Dune", SCHEMA, page())[0] == {"title": "Dune", "price": 9.5, "in_stock": True}
 
 
 def test_done_stores_extracted_values(monkeypatch):
@@ -241,3 +297,11 @@ def test_rejected_done_does_not_extract(monkeypatch):
     monkeypatch.setattr(loop, "extract_fields", Mock())
     act_now(runner)
     loop.extract_fields.assert_not_called()
+
+
+def test_rejected_done_waits_for_the_page_to_change_before_choosing_again(monkeypatch):
+    runner = done_runner()
+    monkeypatch.setattr(loop, "verify_done", verifier(0.3))
+    runner.state["decision"] = dict(DONE)
+    act_now(runner)
+    runner.state["browser"].wait_for_change.assert_called_once_with(runner.state["page"])
