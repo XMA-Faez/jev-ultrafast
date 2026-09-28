@@ -17,6 +17,8 @@ Read AGENTS.md and README.md first. AGENTS.md invariants are hard rules.
 - MCP tabs are bounded (2026-09-26): `browser_task` with `session_id` + `url` navigates the same tab; a daemon thread closes sessions idle past `JEV_MCP_IDLE_MINUTES` (10); opening beyond `JEV_MCP_MAX_SESSIONS` (3) closes the least recently used idle session. Busy sessions are never closed; closed-session reasons are kept for the error message.
 - Plan of record: `~/.claude/plans/come-up-with-a-spicy-dolphin.md` (stages 0–4).
 
+- Remotes (2026-09-28): `fork` = github.com/XMA-Faez/jev-ultrafast (our work, push here); `origin` = upstream browser-use/jev-ultrafast (read only). `main` tracks `fork/main`.
+
 ## Preferences & Rules
 - Delegate large multi-part work to parallel agents with strict per-file ownership (user request, 2026-09-23).
 - Avoid comments; use expressive names. Keep the loop small and readable.
