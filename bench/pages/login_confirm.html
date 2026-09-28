@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Notebook · Sign in</title>
+    <style>
+      :root {
+        --ink: #1f2933;
+        --muted: #62707d;
+        --line: #d5dbe1;
+        --surface: #ffffff;
+        --page: #f4f6f8;
+        --danger: #b42318;
+      }
+      body {
+        margin: 0;
+        font: 15px system-ui, sans-serif;
+        color: var(--ink);
+        background: var(--page);
+      }
+      main {
+        max-width: 440px;
+        margin: 0 auto;
+        padding: 48px 20px;
+      }
+      label {
+        display: block;
+        margin: 14px 0 4px;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        font: inherit;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+      button {
+        margin-top: 18px;
+        font: inherit;
+        padding: 10px 16px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+      .danger {
+        color: var(--danger);
+      }
+      .muted {
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section id="sign-in">
+        <h1>Sign in to Notebook</h1>
+        <form id="login">
+          <label for="user">Username</label>
+          <input id="user" autocomplete="username" />
+          <label for="secret">Password</label>
+          <input id="secret" type="password" autocomplete="current-password" />
+          <button>Sign in</button>
+        </form>
+        <p id="error" class="danger" hidden>Wrong username or password.</p>
+      </section>
+      <section id="notebook" hidden>
+        <h1>Notebook</h1>
+        <p id="who" class="muted"></p>
+        <p id="draft">Draft: Harbour survey notes</p>
+        <button id="delete" class="danger">Delete draft</button>
+        <p id="status" class="muted"></p>
+      </section>
+    </main>
+    <script>
+      const signIn = document.getElementById("sign-in");
+      const notebook = document.getElementById("notebook");
+      document.getElementById("login").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const user = document.getElementById("user").value.trim();
+        const password = document.getElementById("secret").value;
+        const accepted = user === "ada" && password === "lovelace-1815";
+        document.getElementById("error").hidden = accepted;
+        if (!accepted) return;
+        signIn.hidden = true;
+        notebook.hidden = false;
+        document.getElementById("who").textContent = "Signed in as ada";
+      });
+      document.getElementById("delete").addEventListener("click", () => {
+        if (!confirm("Delete the draft “Harbour survey notes”?")) {
+          document.getElementById("status").textContent = "Draft kept.";
+          return;
+        }
+        document.getElementById("draft").remove();
+        document.getElementById("delete").remove();
+        document.getElementById("status").textContent = "Draft deleted.";
+      });
+    </script>
+  </body>
+</html>

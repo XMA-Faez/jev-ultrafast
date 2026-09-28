@@ -90,7 +90,10 @@ def drive(agent, task, deadline):
         if snapshot["status"] != "paused":
             return snapshot, pauses
         pauses += 1
-        snapshot = agent.approve() if getattr(task, "ON_PAUSE", "reject") == "approve" else agent.reject()
+        on_pause = getattr(task, "ON_PAUSE", "reject")
+        if on_pause == "stop":
+            return snapshot, pauses
+        snapshot = agent.approve() if on_pause == "approve" else agent.reject()
         if pauses >= MAXIMUM_PAUSES_PER_RUN or time.monotonic() > deadline:
             return snapshot, pauses
 

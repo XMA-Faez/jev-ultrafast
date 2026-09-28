@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Lumen catalogue</title>
+    <style>
+      :root {
+        --ink: #202626;
+        --muted: #69736f;
+        --line: #d8dedb;
+        --surface: #ffffff;
+        --page: #f6f7f5;
+      }
+      body {
+        margin: 0;
+        font: 15px system-ui, sans-serif;
+        color: var(--ink);
+        background: var(--page);
+      }
+      main {
+        max-width: 680px;
+        margin: 0 auto;
+        padding: 32px 20px;
+      }
+      input,
+      button {
+        font: inherit;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+      .item {
+        height: 120px;
+        margin: 12px 0;
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+      .muted {
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Lumen catalogue</h1>
+      <form id="search">
+        <input id="query" name="q" aria-label="Search the catalogue" />
+        <button>Search</button>
+      </form>
+      <p id="status" class="muted"></p>
+      <div id="results"></div>
+      <nav id="pages" hidden></nav>
+    </main>
+    <script>
+      const RESULTS_DELAY_MS = 2500;
+      const parameters = new URLSearchParams(location.search);
+      const query = parameters.get("q");
+      const pageNumber = Number(parameters.get("page") || 1);
+      const status = document.getElementById("status");
+      if (query) {
+        document.getElementById("query").value = query;
+        status.textContent = "Searching…";
+        setTimeout(() => {
+          status.textContent = `12 results for “${query}” · page ${pageNumber} of 2`;
+          const results = document.getElementById("results");
+          for (let index = 1; index <= 6; index++) {
+            const item = document.createElement("div");
+            item.className = "item";
+            item.textContent = `${query} model ${(pageNumber - 1) * 6 + index}`;
+            results.append(item);
+          }
+          const pages = document.getElementById("pages");
+          for (const number of [1, 2]) {
+            const link = document.createElement("a");
+            link.href = `?q=${encodeURIComponent(query)}&page=${number}`;
+            link.textContent = `Page ${number}`;
+            link.style.marginRight = "12px";
+            pages.append(link);
+          }
+          pages.hidden = false;
+        }, RESULTS_DELAY_MS);
+      }
+    </script>
+  </body>
+</html>

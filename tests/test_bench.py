@@ -109,6 +109,37 @@ PASSING = {
         "text": "Projects\nAtlas 12 files\nBeacon 4 files",
         "actions": [action("Delete project Atlas"), action("Delete project Beacon")],
     },
+    "login_confirm": {
+        "url": f"{LOCAL}/login_confirm.html",
+        "title": "Notebook · Sign in",
+        "text": "Notebook\nSigned in as ada\nDraft deleted.",
+        "actions": [],
+    },
+    "slow_catalogue": {
+        "url": f"{LOCAL}/slow_catalogue.html?q=lamp&page=2",
+        "title": "Lumen catalogue",
+        "text": "Lumen catalogue\n12 results for “lamp” · page 2 of 2\nlamp model 7",
+        "actions": [],
+    },
+    "web_form": {
+        "url": "https://httpbin.org/post",
+        "title": "",
+        "text": json.dumps({"form": {"custname": "Alex Doe", "size": "large", "topping": ["cheese", "bacon"],
+                                    "delivery": "19:30", "comments": "Ring twice"}}),
+        "actions": [],
+    },
+    "shop_checkout": {
+        "url": "https://www.saucedemo.com/checkout-step-two.html",
+        "title": "Swag Labs",
+        "text": "Checkout: Overview\nSauce Labs Backpack\nFinish",
+        "actions": [action("Finish")],
+    },
+    "map_search": {
+        "url": "https://www.openstreetmap.org/way/5013364",
+        "title": "Way: Tour Eiffel | OpenStreetMap",
+        "text": "Way: Tour Eiffel\nParis, Île-de-France, France",
+        "actions": [],
+    },
 }
 EXTRACTED = {"popup_docs": {"monthly_price": "$24"}}
 
@@ -146,6 +177,19 @@ MUTATIONS = [
     ("popup_docs", "stayed on docs", replace_url(f"{LOCAL}/popup_docs.html")),
     ("checkpoint", "deleted", replace_url(f"{LOCAL}/checkpoint.html?deleted=atlas")),
     ("checkpoint", "row gone", lambda page: page.update(actions=page["actions"][1:])),
+    ("login_confirm", "draft kept", replace_text("Draft deleted.", "Draft kept.")),
+    ("login_confirm", "not signed in", replace_text("Signed in as ada", "Sign in to Notebook")),
+    ("login_confirm", "dialog still open", lambda page: page.update(dialog={"type": "confirm"})),
+    ("slow_catalogue", "first page", replace_url(f"{LOCAL}/slow_catalogue.html?q=lamp&page=1")),
+    ("slow_catalogue", "still loading", replace_text("12 results for “lamp” · page 2 of 2", "Searching…")),
+    ("web_form", "small pizza", replace_text('"large"', '"small"')),
+    ("web_form", "one topping", replace_text('["cheese", "bacon"]', '"cheese"')),
+    ("web_form", "not submitted", replace_url("https://httpbin.org/forms/post")),
+    ("shop_checkout", "ordered", lambda page: page.update(url="https://www.saucedemo.com/checkout-complete.html",
+                                                          text="Thank you for your order!")),
+    ("shop_checkout", "empty cart", replace_text("Sauce Labs Backpack", "")),
+    ("map_search", "search list", replace_url("https://www.openstreetmap.org/search?query=Eiffel%20Tower")),
+    ("map_search", "other city", replace_text("Paris", "Las Vegas")),
 ]
 
 

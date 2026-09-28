@@ -1,7 +1,7 @@
 """Each task module exports URL, GOAL and verify(page, extracted=None) -> {"passed", "checks"}.
 
 URL may contain "{local}", which the runner replaces with the loopback origin of bench.server.
-Optional: EXTRACT ({key: description}), PAUSE_BEFORE (label substrings), ON_PAUSE ("reject" | "approve").
+Optional: EXTRACT ({key: description}), PAUSE_BEFORE (label substrings), ON_PAUSE ("reject" | "approve" | "stop").
 Verifiers read the final page (url, title, visible text, actions) and never trust the model's DONE.
 """
 
@@ -21,6 +21,11 @@ TASK_NAMES = (
     "iframe_booking",
     "popup_docs",
     "checkpoint",
+    "login_confirm",
+    "slow_catalogue",
+    "web_form",
+    "shop_checkout",
+    "map_search",
 )
 
 
