@@ -9,40 +9,130 @@ import httpx
 from .questions import EXTRACT, EXTRACT_MAX_BYTES, NEXT_ACTION, TARGET, TEXT_VALUE, VERIFY_DONE, VERIFY_DONE_CRITERIA
 from .settings import decision_route, text_model
 
-CLIENT = httpx.Client(http2=True, timeout=25)
+CLIENT = httpx.Client(http2=True, timeout=httpx.Timeout(25, connect=5))
+TRANSIENT_STATUSES = {429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529}
+MODEL_ATTEMPTS = 3
+ATTEMPT_SECONDS = 20
+PROVIDER_MESSAGE_CHARS = 200
+RECENT_ACTION_KEYS = ("action", "kind", "text", "page_changed")
+
+
+def provider_error(payload):
+    """A provider failure reported inside an HTTP 200 body, as (code or None, message)."""
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not error:
+        return None
+    details = error if isinstance(error, dict) else {"message": error}
+    try:
+        code = int(details.get("code"))
+    except (TypeError, ValueError):
+        code = None
+    return code, str(details.get("message") or details)[:PROVIDER_MESSAGE_CHARS]
+
+
+def post_within_deadline(url, key, body, deadline):
+    """Providers keep slow requests alive with filler bytes, so the read timeout alone never ends them."""
+    with CLIENT.stream("POST", url, json=body, headers={"Authorization": f"Bearer {key}"}) as response:
+        chunks = []
+        for chunk in response.iter_bytes():
+            chunks.append(chunk)
+            if time.monotonic() > deadline:
+                raise TimeoutError
+        content_type = response.headers.get("content-type", "application/json")
+        return httpx.Response(response.status_code, headers={"content-type": content_type}, content=b"".join(chunks))
 
 
 def post_json(url, key, body):
-    for attempt in range(3):
+    """POST a read-only model request, retrying transient failures a bounded number of times."""
+    failure = None
+    for attempt in range(MODEL_ATTEMPTS):
+        if attempt:
+            time.sleep(0.5 * 2 ** (attempt - 1))
         try:
-            response = CLIENT.post(url, json=body, headers={"Authorization": f"Bearer {key}"})
-        except httpx.HTTPError:
-            raise RuntimeError("Model connection failed; no action executed.") from None
-        if response.status_code in {429, 529, 503} and attempt < 2:
-            time.sleep(0.5 * 2**attempt)
+            response = post_within_deadline(url, key, body, time.monotonic() + ATTEMPT_SECONDS)
+        except httpx.HTTPError as error:
+            failure = f"Model connection failed ({type(error).__name__})"
+            continue
+        except TimeoutError:
+            failure = f"Model call took longer than {ATTEMPT_SECONDS} s"
+            continue
+        if response.status_code in TRANSIENT_STATUSES:
+            failure = f"Model provider returned HTTP {response.status_code}"
             continue
         if response.is_error:
             raise RuntimeError(f"Model provider returned HTTP {response.status_code}; no action executed.")
-        return response.json()
-    raise RuntimeError("Model unavailable")
+        try:
+            payload = response.json()
+        except ValueError:
+            raise RuntimeError("Model provider returned a non-JSON body; no action executed.") from None
+        error = provider_error(payload)
+        if error is None:
+            return payload
+        code, message = error
+        failure = f"Model provider error {code}: {message}" if code else f"Model provider error: {message}"
+        if code not in TRANSIENT_STATUSES:
+            raise RuntimeError(f"{failure}; no action executed.")
+    raise RuntimeError(f"{failure} after {MODEL_ATTEMPTS} attempts; no action executed.")
 
 
-def validate_choice(answer, ids):
-    try:
-        probabilities = answer["probabilities"]
-        numbers = [*probabilities.values(), answer["confidence"]]
-        valid = (
-            answer["choice"] in ids
-            and set(probabilities) == set(ids)
-            and all(type(n) in (int, float) and math.isfinite(n) and 0 <= n <= 1 for n in numbers)
-            and abs(sum(probabilities.values()) - 1) < 0.02
-            and probabilities[answer["choice"]] >= max(probabilities.values()) - 1e-6
-        )
-    except (KeyError, TypeError, ValueError):
-        valid = False
-    if not valid:
-        raise ValueError("Invalid TypeSafe response; no action executed.")
+def is_probability(number):
+    return type(number) in (int, float) and math.isfinite(number) and 0 <= number <= 1
+
+
+def probability_sum_tolerance(option_count):
+    """Half a unit of three-decimal rounding per option, never tighter than 0.02."""
+    return max(0.02, 0.0005 * option_count)
+
+
+def choice_problem(answer, ids):
+    if not isinstance(answer, dict) or not answer:
+        return "missing answer"
+    probabilities = answer.get("probabilities")
+    if not isinstance(probabilities, dict):
+        return "missing probabilities"
+    chosen = answer.get("choice")
+    if not isinstance(chosen, str) or chosen not in ids:
+        return f"choice {chosen!r} not offered"
+    missing, unknown = set(ids) - set(probabilities), set(probabilities) - set(ids)
+    if missing or unknown:
+        return f"probabilities miss {len(missing)} offered and add {len(unknown)} unknown options"
+    if not all(is_probability(n) for n in probabilities.values()):
+        return "a probability is not a number in [0, 1]"
+    if not is_probability(answer.get("confidence")):
+        return "confidence is not a number in [0, 1]"
+    total = sum(probabilities.values())
+    if abs(total - 1) > probability_sum_tolerance(len(ids)):
+        return f"probabilities sum to {total:.3f} over {len(ids)} options"
+    if probabilities[chosen] < max(probabilities.values()) - 1e-6:
+        return "choice is not the most probable option"
+    return None
+
+
+def invalid_response(head, problem):
+    return ValueError(f"Invalid TypeSafe response ({head}: {problem}); no action executed.")
+
+
+def validate_choice(answer, ids, head="choice"):
+    problem = choice_problem(answer, ids)
+    if problem:
+        raise invalid_response(head, problem)
     return answer
+
+
+def answers_of(result):
+    answers = result.get("answers") if isinstance(result, dict) else None
+    return answers if isinstance(answers, dict) else {}
+
+
+def ask_decision(url, key, body, read_answers):
+    """Decision requests are pure reads, so one invalid response earns one fresh request."""
+    for attempt in range(2):
+        result = post_json(url, key, body)
+        try:
+            return result, read_answers(answers_of(result))
+        except ValueError:
+            if attempt:
+                raise
 
 
 def action_space(actions):
@@ -79,7 +169,25 @@ def action_space(actions):
 
 
 def recent_actions(history, limit=10):
-    return [{k: h.get(k) for k in ("action", "kind", "text", "page_changed")} for h in history[-limit:]]
+    """The last entries with consecutive identical ones collapsed into one entry counted by `times`."""
+    runs = []
+    for entry in history:
+        summary = {k: entry.get(k) for k in RECENT_ACTION_KEYS}
+        if runs and runs[-1][0] == summary:
+            runs[-1][1] += 1
+        else:
+            runs.append([summary, 1])
+    return [{**summary, "times": times} if times > 1 else summary for summary, times in runs[-limit:]]
+
+
+def page_state(page):
+    scroll = page.get("scroll") or {}
+    above = scroll.get("y", 0)
+    below = scroll.get("height", 0) - above - page.get("h", 0)
+    return {
+        **{k: page[k] for k in ("url", "title", "text")},
+        "scroll": {"above_px": max(0, round(above)), "below_px": max(0, round(below))},
+    }
 
 
 def choose(state, goal, history, completed_goals=()):
@@ -112,23 +220,24 @@ def choose(state, goal, history, completed_goals=()):
     url, key, model = decision_route()
     body = {
         "model": model,
-        "state": {
-            "page": {k: state[k] for k in ("url", "title", "text")},
-            "elements": elements,
-            "recent_actions": recent_actions(history),
-        },
+        "state": {"page": page_state(state), "elements": elements, "recent_actions": recent_actions(history)},
         "questions": questions,
     }
+
+    def read_answers(answers):
+        operation_answer = validate_choice(answers.get("operation"), operations, "operation")
+        operation = operation_answer["choice"]
+        if operation not in targets:
+            return operation_answer, None
+        head = operation.lower() + "_target"
+        return operation_answer, validate_choice(answers.get(head), targets[operation], head)
+
     started = time.perf_counter()
-    result = post_json(url, key, body)
-    operation_answer = validate_choice(result["answers"].get("operation", {}), operations)
+    result, (operation_answer, target_answer) = ask_decision(url, key, body, read_answers)
     operation = operation_answer["choice"]
     target = None
-    target_answer = None
     probabilities = {}
-    if operation in targets:
-        # Unused target heads cannot cause an action. Validate the head selected by the operation.
-        target_answer = validate_choice(result["answers"].get(operation.lower() + "_target", {}), targets[operation])
+    if target_answer:
         target = target_answer["choice"]
         choice = targets[operation][target]["id"]
         probabilities = {a["id"]: target_answer["probabilities"][index] for index, a in targets[operation].items()}
@@ -144,7 +253,7 @@ def choose(state, goal, history, completed_goals=()):
         "operation_probabilities": operation_answer["probabilities"],
         "target_probabilities": target_answer["probabilities"] if target_answer else {},
         "target_confidence": target_answer["confidence"] if target_answer else None,
-        "raw_answers": result["answers"],
+        "raw_answers": answers_of(result),
         "model": result.get("model", model),
         "usage": result.get("usage", {}),
         "latency_ms": round((time.perf_counter() - started) * 1000),
@@ -152,14 +261,12 @@ def choose(state, goal, history, completed_goals=()):
     }
 
 
-def validate_noul(answer):
-    try:
-        probability = answer["noul"]
-        valid = type(probability) in (int, float) and math.isfinite(probability) and 0 <= probability <= 1
-    except (KeyError, TypeError):
-        valid = False
-    if not valid:
-        raise ValueError("Invalid TypeSafe response; no action executed.")
+def validate_noul(answer, head="noul"):
+    probability = answer.get("noul") if isinstance(answer, dict) else None
+    if probability is None:
+        raise invalid_response(head, "missing answer")
+    if not is_probability(probability):
+        raise invalid_response(head, "noul is not a number in [0, 1]")
     return float(probability)
 
 
@@ -169,7 +276,7 @@ def verify_done(page, goal, history):
     body = {
         "model": model,
         "state": {
-            "page": {k: page[k] for k in ("url", "title", "text")},
+            "page": page_state(page),
             "elements": action_space(page["actions"])[0],
             "recent_actions": recent_actions(history),
         },
@@ -182,13 +289,9 @@ def verify_done(page, goal, history):
         },
     }
     started = time.perf_counter()
-    result = post_json(url, key, body)
-    try:
-        answer = result["answers"]["done"]
-    except (KeyError, TypeError):
-        answer = None
+    result, probability = ask_decision(url, key, body, lambda answers: validate_noul(answers.get("done"), "done"))
     return {
-        "probability": validate_noul(answer),
+        "probability": probability,
         "latency_ms": round((time.perf_counter() - started) * 1000),
         "usage": result.get("usage", {}),
         "model": result.get("model", model),
@@ -236,15 +339,32 @@ def ask_text_helper(system_prompt, context):
     }
 
 
+def parse_json_object(content):
+    """The first complete JSON object in the content; code fences and trailing text around it are ignored."""
+    start = content.find("{") if isinstance(content, str) else -1
+    if start < 0:
+        raise ValueError("no JSON object")
+    output, _ = json.JSONDecoder().raw_decode(content, start)
+    return output
+
+
+class NoFieldText(ValueError):
+    """The text helper produced no usable value; nothing was typed."""
+
+
 def field_text(context):
     content, meta = ask_text_helper(TEXT_VALUE, context)
     try:
-        output = json.loads(content)
-        value = output["text"]
-        if set(output) != {"text"} or not isinstance(value, str) or not value.strip() or len(value) > 2000:
-            raise ValueError()
-    except (ValueError, KeyError, TypeError):
-        raise ValueError("Text helper returned no valid field value; nothing typed.") from None
+        output = parse_json_object(content)
+    except ValueError:
+        raise NoFieldText("Text helper output was not valid JSON; nothing typed.") from None
+    value = output.get("text")
+    if set(output) != {"text"}:
+        raise NoFieldText("Text helper output must have exactly the key `text`; nothing typed.")
+    if value is None:
+        raise NoFieldText("Text helper found no value for this field in the goal; nothing typed.")
+    if not isinstance(value, str) or not value.strip() or len(value) > 2000:
+        raise NoFieldText("Text helper returned an empty, non-text, or oversized value; nothing typed.")
     return value, meta
 
 
@@ -252,6 +372,23 @@ def is_extracted_scalar(value):
     if isinstance(value, float):
         return math.isfinite(value)
     return value is None or isinstance(value, (str, int, bool))
+
+
+def extraction_problem(output, schema):
+    if not isinstance(output, dict):
+        return "not a JSON object"
+    missing, extra = set(schema) - set(output), set(output) - set(schema)
+    if missing:
+        return "missing keys " + ", ".join(sorted(missing))
+    if extra:
+        return "extra keys " + ", ".join(sorted(extra))
+    nested = sorted(k for k, v in output.items() if not is_extracted_scalar(v))
+    if nested:
+        return "non-scalar values for " + ", ".join(nested)
+    size = len(json.dumps(output).encode())
+    if size > EXTRACT_MAX_BYTES:
+        return f"too large ({size} bytes > {EXTRACT_MAX_BYTES})"
+    return None
 
 
 def extract_fields(goal, schema, page):
@@ -263,15 +400,10 @@ def extract_fields(goal, schema, page):
     }
     content, meta = ask_text_helper(EXTRACT, context)
     try:
-        output = json.loads(content)
-        valid = (
-            isinstance(output, dict)
-            and set(output) == set(schema)
-            and all(is_extracted_scalar(v) for v in output.values())
-            and len(json.dumps(output).encode()) <= EXTRACT_MAX_BYTES
-        )
-    except (ValueError, TypeError):
-        valid = False
-    if not valid:
-        raise ValueError("Extraction returned invalid data.")
+        output = parse_json_object(content)
+    except ValueError:
+        raise ValueError("Extraction returned invalid data: not JSON.") from None
+    problem = extraction_problem(output, schema)
+    if problem:
+        raise ValueError(f"Extraction returned invalid data: {problem}.")
     return output, meta
