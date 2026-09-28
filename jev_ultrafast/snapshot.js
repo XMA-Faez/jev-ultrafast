@@ -6,7 +6,11 @@
     const id=cache.ids.get(e); cache.nodes.set(id,e); return id;
   };
   for (const [id,e] of cache.nodes) if (!e.isConnected) cache.nodes.delete(id);
-  const safe = e => !['password','file','hidden'].includes(e.type);
+  const safe = e => !['file','hidden'].includes(e.type);
+  const secret = e => e.tagName==='INPUT' && e.type==='password';
+  const maskedValue = e => e.value ? '••••••' : '';
+  const comparableValue = e => secret(e) ? e.value.length : e.value;
+  const collapse = value => String(value??'').replace(/\s+/g,' ').trim();
   const composedParent = n => n.assignedSlot || n.parentElement || n.getRootNode().host || null;
   const composedClosest = (e,query) => {
     for (let n=e; n; n=composedParent(n)) if (n.matches(query)) return n;
@@ -35,22 +39,44 @@
   const visible = e => !composedClosest(e,'[aria-hidden="true"],[inert]') &&
     e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
   const byId = (e,id) => (e.getRootNode().getElementById?.(id)) || document.getElementById(id);
-  const name = (e,seen=new Set()) => {
+  const formControls=['INPUT','SELECT','TEXTAREA'];
+  const rawName = (e,seen=new Set()) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
     const referenced=(e.getAttribute('aria-labelledby')||'').split(/\s+/)
-      .map(id=>name(byId(e,id),seen)).filter(Boolean).join(' ');
+      .map(id=>rawName(byId(e,id),seen)).filter(Boolean).join(' ');
     return referenced || e.getAttribute('aria-label') ||
-      [...(e.labels||[])].map(l=>name(l,seen)).filter(Boolean).join(' ') ||
+      [...(e.labels||[])].map(l=>rawName(l,seen)).filter(Boolean).join(' ') ||
       (['button','submit','reset'].includes(e.type) ? e.value : '') || e.getAttribute('alt') ||
-      (e.tagName==='INPUT' ? '' : [...e.childNodes].map(n=>n.nodeType===3 ? n.textContent :
-        n.nodeType===1 && n.getAttribute('aria-hidden')!=='true' ? name(n,seen) : '').join(' ').trim()) ||
+      (formControls.includes(e.tagName) ? '' : [...e.childNodes].map(n=>n.nodeType===3 ? n.textContent :
+        n.nodeType===1 && n.getAttribute('aria-hidden')!=='true' ? rawName(n,seen) : '').join(' ').trim()) ||
       e.getAttribute('title') || e.getAttribute('placeholder') || '';
   };
   const roles=['button','link','checkbox','radio','switch','tab','menuitem','menuitemradio',
     'option','gridcell','combobox','textbox','searchbox','spinbutton','slider'];
   const selector='a[href],button,input,textarea,select,summary,[contenteditable="true"],'+
     roles.map(role=>'[role="'+role+'"]').join(',');
+  const siblingText = n => n.nodeType===Node.TEXT_NODE ? collapse(n.textContent) :
+    n.nodeType===Node.ELEMENT_NODE && !n.matches('script,style,noscript,template') && visible(n) ?
+      collapse(n.innerText) : '';
+  const firstSiblingText = (e,direction) => {
+    for (let n=e[direction]; n; n=n[direction]) {
+      if (n.nodeType===Node.ELEMENT_NODE && (n.matches(selector) || n.querySelector(selector))) return '';
+      const text=siblingText(n);
+      if (text) return text.slice(0,80);
+    }
+    return '';
+  };
+  const adjacentText = e => {
+    const order=['checkbox','radio'].includes(e.type) ? ['nextSibling','previousSibling'] :
+      ['previousSibling','nextSibling'];
+    return order.map(direction=>firstSiblingText(e,direction)).find(Boolean) || '';
+  };
+  const name = e => {
+    const own=collapse(rawName(e));
+    if (own || !formControls.includes(e.tagName)) return own;
+    return adjacentText(e) || (e.tagName==='SELECT' ? collapse(e.getAttribute('name')) || 'dropdown' : '');
+  };
   const role = e => {
     const explicit=e.getAttribute('role');
     if (roles.includes(explicit)) return explicit;
@@ -63,7 +89,7 @@
       if (['button','submit','reset','image'].includes(e.type)) return 'button';
       if (e.type==='search') return 'searchbox';
       if (e.type==='number') return 'spinbutton';
-      if (['text','email','url','tel','date','time','month','color'].includes(e.type)) return 'textbox';
+      if (['text','email','url','tel','password','date','time','month','color'].includes(e.type)) return 'textbox';
       if (e.type==='range') return 'slider';
     }
     return null;
@@ -96,9 +122,9 @@
     return parent && !parent.closest('script,style,noscript,template') && !composedClosest(parent,selector) &&
       visible(parent);
   }).map(node=>node.textContent.trim()).filter(Boolean).join(' ');
-  const implicitName = e => (e.getAttribute('aria-label') || ownVisibleText(e) || e.getAttribute('title') || '')
-    .replace(/\s+/g,' ').trim().slice(0,120);
-  const firstTextLine = (e,excluding='') => ((e.innerText||'').split('\n').map(line=>line.trim())
+  const implicitName = e =>
+    collapse(e.getAttribute('aria-label') || ownVisibleText(e) || e.getAttribute('title')).slice(0,120);
+  const firstTextLine = (e,excluding='') => ((e.innerText||'').split('\n').map(collapse)
     .find(line=>line && line!==excluding) || '').slice(0,60);
   const scrollsVertically = e => e!==document.documentElement && e!==document.body && e.tagName!=='TEXTAREA' &&
     ['auto','scroll','overlay'].includes(styleOf(e).overflowY) && e.scrollHeight>e.clientHeight+2;
@@ -109,12 +135,12 @@
   };
   cache.pageKey=()=>[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
     queryComposed('input,textarea,select').filter(safe)
-      .map(e=>[identity(e),e.value,e.checked,e.selectedIndex,e.disabled,e.readOnly])];
+      .map(e=>[identity(e),comparableValue(e),e.checked,e.selectedIndex,e.disabled,e.readOnly])];
   cache.guard=e=>{
     if (!e?.isConnected || !visible(e)) return null;
     const scope=e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
-    return [identity(e),role(e),name(e),e.value??null,e.checked??null,e.selectedIndex??null,
-      e.readOnly??null,e.matches(':disabled'),e.getAttribute('aria-disabled'),
+    return [identity(e),role(e),name(e),secret(e) ? comparableValue(e) : e.value??null,e.checked??null,
+      e.selectedIndex??null,e.readOnly??null,e.matches(':disabled'),e.getAttribute('aria-disabled'),
       e.getAttribute('aria-expanded'),e.getAttribute('aria-checked'),e.getAttribute('aria-selected'),
       e.getAttribute('href'),scope?.innerText?.slice(0,6000)||''];
   };
@@ -157,16 +183,17 @@
     if (e.tagName==='SELECT') {
       for (const o of e.options) if (!o.selected && !o.disabled && !o.closest('optgroup[disabled]'))
         actions.push({...base,kind:'select',value:o.value,
-          current_value:[...e.selectedOptions].map(o=>o.label).join(', '),label:base.label+' → '+o.label});
+          current_value:[...e.selectedOptions].map(o=>collapse(o.label)).join(', '),
+          label:base.label+' → '+collapse(o.label)});
     } else {
       const format=nativeFormat(e);
       const editable=!e.readOnly && e.getAttribute('aria-readonly')!=='true' &&
         (format || ['textbox','searchbox','spinbutton'].includes(rname) ||
           (rname==='combobox' && ['INPUT','TEXTAREA'].includes(e.tagName)));
-      const value='value' in e ? String(e.value) :
+      const value=secret(e) ? maskedValue(e) : 'value' in e ? String(e.value) :
         e.isContentEditable || rname==='combobox' ? e.innerText.trim() : '';
       const native=editable && format ? {native_value:true,format} : {};
-      actions.push({...base,kind:editable?'fill':'click',value,...native});
+      actions.push({...base,kind:editable?'fill':'click',value,...native,...(editable && secret(e) && {secret:true})});
       if (editable && !['range','color'].includes(e.type))
         actions.push({...base,kind:'click',value,label:'Open '+base.label});
     }

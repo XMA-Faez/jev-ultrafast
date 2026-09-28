@@ -1,0 +1,26 @@
+<!doctype html>
+<title>Label naming</title>
+<nav>
+  <a href="#issues" id="issues">Issues
+             <span class="count">155</span></a>
+  <a href="#home"><img alt="OpenStreetMap logo" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="8" height="8">
+      OpenStreetMap</a>
+  <button id="spaced">  Save
+     draft  </button>
+</nav>
+<div class="example">
+  <h3>Dropdown List</h3>
+  <select id="dropdown">
+    <option value="" disabled selected>Please select an option</option>
+    <option value="1">Option 1</option>
+    <option value="2">Option 2</option>
+  </select>
+</div>
+<div><select id="sort" name="sort_order"><option>Newest</option><option>Oldest</option></select></div>
+<div><select id="bare"><option>Red</option><option>Blue</option></select></div>
+<div><select id="named" aria-label="Country"><option>France</option><option>Spain</option></select></div>
+<form id="checkboxes">
+  <input type="checkbox"> checkbox 1<br>
+  <input type="checkbox" checked> checkbox 2
+</form>
+<p>Email <input id="email" type="email"></p>

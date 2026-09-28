@@ -1,5 +1,7 @@
 """Snapshot vocabulary in a real browser: key controls, native value inputs and open shadow roots."""
 
+import json
+
 import pytest
 
 from jev_ultrafast.browser import StalePage
@@ -142,3 +144,67 @@ def test_scroll_targets_the_overflowing_panel_instead_of_the_page(open_browser):
     assert browser.wait_until("document.querySelector('.panel').scrollTop > 0", 2)
     assert browser.evaluate("window.mapWheels") == 0
     assert "scroll_up_in_1" in action_ids(browser.observe(screenshot=False))
+
+
+def test_labels_collapse_whitespace(open_browser):
+    page = open_browser(page="labels_forms.html").observe(screenshot=False)
+    links = [a["label"] for a in page["actions"] if a.get("role") == "link"]
+    assert links == ["Issues 155", "OpenStreetMap logo OpenStreetMap"]
+    assert labelled(page, "Save draft")["role"] == "button"
+    assert not [a["label"] for a in page["actions"] if a["label"] != " ".join(a["label"].split())]
+
+
+def test_select_is_never_named_from_its_options(open_browser):
+    page = open_browser(page="labels_forms.html").observe(screenshot=False)
+    selects = [a for a in page["actions"] if a["kind"] == "select"]
+    assert [a["label"] for a in selects] == [
+        "Dropdown List → Option 1",
+        "Dropdown List → Option 2",
+        "sort_order → Oldest",
+        "dropdown → Blue",
+        "Country → Spain",
+    ]
+    assert selects[0]["current_value"] == "Please select an option"
+
+
+def test_unnamed_checkboxes_are_named_by_their_following_text(open_browser):
+    page = open_browser(page="labels_forms.html").observe(screenshot=False)
+    boxes = [(a["label"], a["checked"]) for a in page["actions"] if a.get("role") == "checkbox"]
+    assert boxes == [("checkbox 1", "false"), ("checkbox 2", "true")]
+    assert labelled(page, "Email", "fill")["role"] == "textbox"
+
+
+def test_guard_names_controls_like_their_labels(open_browser):
+    browser = open_browser(page="labels_forms.html")
+    page = browser.observe(screenshot=False)
+    for label in ("checkbox 1", "Issues 155", "Dropdown List → Option 1"):
+        action = labelled(page, label)
+        guard_name = browser.evaluate(f"window.__jevFast.guard(window.__jevFast.nodes.get({action['node']}))[2]")
+        assert guard_name == label.split(" → ")[0]
+
+
+def test_password_field_is_a_secret_fill_with_a_masked_value(open_browser):
+    browser = open_browser(page="password_login.html")
+    page = browser.observe(screenshot=False)
+    password = labelled(page, "Password", "fill")
+    assert (password["role"], password["kind"], password["secret"], password["value"]) == ("textbox", "fill", True, "")
+    assert "secret" not in labelled(page, "Username", "fill")
+    labels = {a["label"] for a in page["actions"]}
+    assert "Avatar" not in labels and not any("csrf" in label for label in labels)
+
+    browser.act(password, page, text="hunter2-very-long-secret")
+    typed = browser.observe(screenshot=False)
+    assert browser.evaluate("document.querySelector('#password').value") == "hunter2-very-long-secret"
+    assert labelled(typed, "Password", "fill")["value"] == "••••••"
+    assert labelled(typed, "Open Password", "click")["value"] == "••••••"
+    assert typed["page_key"] != page["page_key"]
+    assert "hunter2" not in json.dumps(typed, ensure_ascii=False)
+
+
+def test_password_mask_does_not_reveal_length(open_browser):
+    browser = open_browser(page="password_login.html")
+    browser.evaluate("document.querySelector('#password').value='a'")
+    short = labelled(browser.observe(screenshot=False), "Password", "fill")["value"]
+    browser.evaluate("document.querySelector('#password').value='a much longer passphrase'")
+    long = labelled(browser.observe(screenshot=False), "Password", "fill")["value"]
+    assert short == long == "••••••"
